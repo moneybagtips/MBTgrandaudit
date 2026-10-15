@@ -3,7 +3,7 @@ description: Python, dependencies (pip-cached) and a quick database connectivity
 runs:
   using: composite
   steps:
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v7
       with:
         python-version: "3.12"
         cache: pip
