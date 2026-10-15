@@ -1,0 +1,62 @@
+{
+  "EPL": {
+    "dixon_coles": 0.03,
+    "poisson": 0.0136,
+    "bivariate_poisson": 0.0164,
+    "negative_binomial": 0.0136,
+    "xg_poisson": 0.3014,
+    "elo": 0.0359,
+    "pi_rating": 0.0109,
+    "form": 0.0095,
+    "h2h": 0.0068,
+    "market_view": 0.5618
+  },
+  "LALIGA": {
+    "dixon_coles": 0.03,
+    "poisson": 0.0136,
+    "bivariate_poisson": 0.0164,
+    "negative_binomial": 0.0136,
+    "xg_poisson": 0.0191,
+    "elo": 0.0164,
+    "pi_rating": 0.0109,
+    "form": 0.0095,
+    "h2h": 0.0068,
+    "market_view": 0.8636
+  },
+  "BUNDES": {
+    "dixon_coles": 0.03,
+    "poisson": 0.0136,
+    "bivariate_poisson": 0.0164,
+    "negative_binomial": 0.0136,
+    "xg_poisson": 0.0191,
+    "elo": 0.0164,
+    "pi_rating": 0.0109,
+    "form": 0.0095,
+    "h2h": 0.1353,
+    "market_view": 0.7351
+  },
+  "SERIEA": {
+    "dixon_coles": 0.03,
+    "poisson": 0.0136,
+    "bivariate_poisson": 0.0164,
+    "negative_binomial": 0.0136,
+    "xg_poisson": 0.0191,
+    "elo": 0.0594,
+    "pi_rating": 0.0109,
+    "form": 0.0095,
+    "h2h": 0.0068,
+    "market_view": 0.8206
+  },
+  "LIGUE1": {
+    "dixon_coles": 0.03,
+    "poisson": 0.0136,
+    "bivariate_poisson": 0.0164,
+    "negative_binomial": 0.0136,
+    "xg_poisson": 0.0191,
+    "elo": 0.0164,
+    "pi_rating": 0.0109,
+    "form": 0.0095,
+    "h2h": 0.0068,
+    "market_view": 0.8636
+  }
+}

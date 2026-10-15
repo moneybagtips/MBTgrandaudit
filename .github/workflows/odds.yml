@@ -1,0 +1,25 @@
+name: Closing odds
+
+# Every 30 minutes through the European match window: record the latest odds for
+# logged fixtures kicking off within the hour. The last snapshot before kick-off
+# is treated as the closing line.
+on:
+  schedule:
+    - cron: "*/30 9-21 * * *"    # 09:00-21:30 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: odds
+  cancel-in-progress: false
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: python -m mbtgrandaudit snapshot-odds --hours 1

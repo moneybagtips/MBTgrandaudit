@@ -1,0 +1,50 @@
+name: Re-tune ensemble weights
+
+# Monthly: walk-forward backtest of the big five leagues, then commit the tuned
+# ensemble weights so the daily predictions pick them up.
+on:
+  schedule:
+    - cron: "0 3 2 * *"          # 03:00 UTC on the 2nd of each month
+  workflow_dispatch:
+    inputs:
+      leagues:
+        description: "League keys (space separated) or 'all'"
+        default: EPL LALIGA BUNDES SERIEA LIGUE1
+
+concurrency:
+  group: retune
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  retune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache
+          key: data-cache-${{ github.run_id }}
+          restore-keys: data-cache-
+      - run: >
+          python -m mbtgrandaudit backtest
+          -l ${{ inputs.leagues || 'EPL LALIGA BUNDES SERIEA LIGUE1' }}
+          --seasons 2 --save-weights
+      - name: Commit weights
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ensemble_weights.json
+          if git diff --cached --quiet; then
+            echo "weights unchanged"
+          else
+            git commit -m "Re-tune ensemble weights ($(date -u +%Y-%m-%d))"
+            git push
+          fi
