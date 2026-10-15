@@ -68,6 +68,23 @@ repo, use `--private` instead.
 gh auth login
 ```
 
+`gh repo create --push` needs at least one commit, so commit the project first. The
+`.gitignore` already keeps `.env`, `data/`, `.cache/` and `reports/` out of the repo.
+
+```bash
+git init -b main
+```
+
+```bash
+git add -A
+```
+
+```bash
+git commit -m "Initial commit"
+```
+
+Check that `git ls-files` lists no `.env` or `.db` file, then create the repo and push:
+
 ```bash
 gh repo create MBTgrandaudit --public --source . --push
 ```
