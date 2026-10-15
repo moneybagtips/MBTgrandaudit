@@ -41,11 +41,12 @@ jobs:
           -l ${{ inputs.leagues || 'all' }} -d ${{ inputs.days || '7' }}
           --log --html site/index.html --json site/predictions.json --csv site/predictions.csv
 
-      - name: Track record
+      # predict already wrote index.html, one page per league and track_record.html;
+      # this adds the value-bet ledger as a CSV
+      - name: Value-bet ledger
         run: |
-          python -m mbtgrandaudit evaluate --source live --html site/track_record.html --bets-csv site/bets.csv \
-            || python -m mbtgrandaudit evaluate --source backtest --html site/track_record.html \
-            || echo "nothing to evaluate yet"
+          python -m mbtgrandaudit evaluate --source live --bets-csv site/bets.csv \
+            || echo "no settled live predictions yet"
 
       - uses: actions/cache/save@v6
         if: always()

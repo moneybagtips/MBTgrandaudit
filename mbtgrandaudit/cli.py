@@ -95,7 +95,7 @@ def cmd_predict(a):
                 store.add_live(pr, key, version, now)
             store.close()
             print(f"[{key}] logged {len(preds)} predictions (model version {version})")
-    _write_outputs(a, by_league, records, extra_html=_track_record_html() if a.html else "")
+    _write_outputs(a, by_league, records)
 
 
 def _entered_odds(event_ids) -> dict:
@@ -117,23 +117,25 @@ def _entered_odds(event_ids) -> dict:
     return out
 
 
-def _track_record_html() -> str:
-    """Track-record card for the predictions report, if the log has settled games."""
+def _track_record_page(source: str | None = None) -> tuple[str, dict] | None:
+    """Full track-record page: live results if any have settled, else the backtest."""
     if not storage.configured():
-        return ""
+        return None
     store = Store()
     try:
-        for source, title, note in (
-                ("live", "Track record: live predictions", "Settled predictions logged with --log. "),
-                ("backtest", "Track record: backtest (no settled live predictions yet)",
-                 "Walk-forward backfill on completed seasons. ")):
-            ev = evaluate.evaluate(store, source)
+        options = [(source, f"Track record: {source or 'all'}", "")] if source is not None else [
+            ("live", "Track record: live predictions", "Settled predictions logged with --log. "),
+            ("backtest", "Track record: backtest (no settled live predictions yet)",
+             "Walk-forward backfill on completed seasons. ")]
+        for src, title, note in options:
+            ev = evaluate.evaluate(store, src)
             if ev is not None:
-                return evaluate.card_html(title, ev["scores"], ev["baseline"], ev["calibration"],
+                card = evaluate.card_html(title, ev["scores"], ev["baseline"], ev["calibration"],
                                           ev["bet_summary"], note, ev["vs_market"])
+                return card, ev
     finally:
         store.close()
-    return ""
+    return None
 
 
 def _fixtures_by_id(league: str, day, ttl: float) -> dict:
@@ -232,12 +234,8 @@ def cmd_evaluate(a):
         path.parent.mkdir(parents=True, exist_ok=True)
         card = evaluate.card_html(f"Track record: {a.source}", ev["scores"], ev["baseline"],
                                   ev["calibration"], ev["bet_summary"], vs_market=ev["vs_market"])
-        path.write_text(
-            '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            '<meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<title>MBTgrandaudit Track Record</title><style>{report.CSS}</style></head>'
-            f'<body><main><h1>MBTgrandaudit track record</h1>{card}</main></body></html>',
-            encoding="utf-8")
+        path.write_text(report.page("MBTgrandaudit track record", card, datetime.now(timezone.utc),
+                                    '<a href="index.html">← Predictions</a>'), encoding="utf-8")
         print(f"wrote {path}")
     store.close()
 
@@ -387,7 +385,7 @@ def cmd_backtest(a):
             print("saved to ensemble_weights.json - used automatically for", key)
 
 
-def _write_outputs(a, by_league, records, extra_html: str = ""):
+def _write_outputs(a, by_league, records):
     for opt in ("json", "csv", "html"):
         if getattr(a, opt, None):
             Path(getattr(a, opt)).parent.mkdir(parents=True, exist_ok=True)
@@ -399,8 +397,17 @@ def _write_outputs(a, by_league, records, extra_html: str = ""):
         print(f"wrote {a.csv}")
     if getattr(a, "html", None) and by_league:
         path = Path(a.html)
-        report.html_report(by_league, path, datetime.now(timezone.utc), extra_html)
-        print(f"wrote {path}")
+        now = datetime.now(timezone.utc)
+        tr = _track_record_page()
+        tr_name = None
+        if tr is not None:
+            tr_name = "track_record.html"
+            path.with_name(tr_name).write_text(
+                report.page("MBTgrandaudit track record", tr[0], now,
+                            f'<a href="{path.name}">← Predictions</a>'), encoding="utf-8")
+            print(f"wrote {path.with_name(tr_name)}")
+        for f in report.html_report(by_league, path, now, tr_name):
+            print(f"wrote {f}")
         if a.open:
             webbrowser.open(path.resolve().as_uri())
 
