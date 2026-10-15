@@ -1,0 +1,79 @@
+name: Predict
+
+# Daily: predict the next 7 days for every league, log to Supabase, build the reports.
+on:
+  schedule:
+    - cron: "0 6 * * *"          # 06:00 UTC daily
+  workflow_dispatch:
+    inputs:
+      leagues:
+        description: "League keys (space separated) or 'all'"
+        default: all
+      days:
+        description: Days ahead
+        default: "7"
+
+concurrency:
+  group: predict
+  cancel-in-progress: false
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      # football-data / ESPN download cache; past seasons never change
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache
+          key: data-cache-${{ github.run_id }}
+          restore-keys: data-cache-
+
+      - name: Predict and log
+        run: >
+          python -m mbtgrandaudit predict
+          -l ${{ inputs.leagues || 'all' }} -d ${{ inputs.days || '7' }}
+          --log --html site/index.html --json site/predictions.json --csv site/predictions.csv
+
+      - name: Track record
+        run: |
+          python -m mbtgrandaudit evaluate --source live --html site/track_record.html --bets-csv site/bets.csv \
+            || python -m mbtgrandaudit evaluate --source backtest --html site/track_record.html \
+            || echo "nothing to evaluate yet"
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .cache
+          key: data-cache-${{ github.run_id }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: site/
+          retention-days: 14
+
+      - uses: actions/upload-pages-artifact@v3
+        if: vars.PUBLISH_PAGES == 'true'
+        with:
+          path: site/
+
+  pages:
+    needs: predict
+    if: vars.PUBLISH_PAGES == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

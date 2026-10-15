@@ -1,0 +1,27 @@
+name: Keepalive
+
+# GitHub disables scheduled workflows in public repositories after 60 days without
+# repository activity. Re-enabling every workflow (including this one) via the API
+# resets that timer; running monthly keeps it well inside the limit.
+on:
+  schedule:
+    - cron: "0 4 1 * *"          # 04:00 UTC on the 1st of each month
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Re-enable all workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPO/actions/workflows" --jq '.workflows[] | "\(.id) \(.name)"' |
+          while read -r id name; do
+            gh api -X PUT "repos/$REPO/actions/workflows/$id/enable" && echo "re-enabled: $name"
+          done
