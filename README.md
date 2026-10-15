@@ -37,8 +37,22 @@ Use `--offline` to run from cached data only.
 ## Leagues
 
 EPL, Championship, La Liga, Bundesliga, Serie A, Ligue 1, Eredivisie, Primeira Liga,
-Belgian Pro League, Süper Lig, Scottish Premiership, Greek Super League
+Belgian Pro League (Jupiler), Süper Lig, Scottish Premiership, Greek Super League,
+Swiss Super League, MLS, Danish Superliga, Norwegian Eliteserien, Japanese J1 League
 (`python -m mbtgrandaudit leagues`). With no `--league`, it runs the big five.
+
+The last five come from football-data.co.uk's "extra leagues" files, which differ:
+* **Results and closing odds only.** No shots, xG or pre-match odds, so `xg_poisson`
+  falls back to goals. In backtests the market view is left out (closing odds would
+  leak future information) and the bookmaker benchmark uses closing odds.
+  Live predictions still get the market view from ESPN's pre-match odds.
+* **No second tier**, so promoted teams start from the below-average newcomer prior.
+* **Seasons:** MLS and Eliteserien run on calendar years. Switzerland, Denmark and
+  (from 2026-27) Japan run August to May.
+* **Switzerland isn't covered by ESPN** for the current season. Fixtures (with 1X2 odds),
+  closing odds and results all come from football-data. It publishes fixtures only a few
+  days ahead, so Swiss games appear in the predictions close to each matchday, and
+  without all-competition form.
 
 ## Data sources (free, no API key)
 

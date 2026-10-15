@@ -58,5 +58,60 @@
     "form": 0.0095,
     "h2h": 0.0068,
     "market_view": 0.8636
+  },
+  "SWISS": {
+    "dixon_coles": 0.066,
+    "poisson": 0.03,
+    "bivariate_poisson": 0.036,
+    "negative_binomial": 0.03,
+    "xg_poisson": 0.2078,
+    "elo": 0.3444,
+    "pi_rating": 0.2305,
+    "form": 0.0403,
+    "h2h": 0.015
+  },
+  "MLS": {
+    "dixon_coles": 0.3254,
+    "poisson": 0.03,
+    "bivariate_poisson": 0.036,
+    "negative_binomial": 0.03,
+    "xg_poisson": 0.042,
+    "elo": 0.3926,
+    "pi_rating": 0.024,
+    "form": 0.105,
+    "h2h": 0.015
+  },
+  "DENMARK": {
+    "dixon_coles": 0.066,
+    "poisson": 0.03,
+    "bivariate_poisson": 0.036,
+    "negative_binomial": 0.03,
+    "xg_poisson": 0.1,
+    "elo": 0.5016,
+    "pi_rating": 0.024,
+    "form": 0.1616,
+    "h2h": 0.0508
+  },
+  "NORWAY": {
+    "dixon_coles": 0.066,
+    "poisson": 0.2074,
+    "bivariate_poisson": 0.036,
+    "negative_binomial": 0.03,
+    "xg_poisson": 0.042,
+    "elo": 0.3788,
+    "pi_rating": 0.024,
+    "form": 0.021,
+    "h2h": 0.1948
+  },
+  "JLEAGUE": {
+    "dixon_coles": 0.066,
+    "poisson": 0.03,
+    "bivariate_poisson": 0.208,
+    "negative_binomial": 0.1865,
+    "xg_poisson": 0.042,
+    "elo": 0.333,
+    "pi_rating": 0.024,
+    "form": 0.021,
+    "h2h": 0.0894
   }
 }

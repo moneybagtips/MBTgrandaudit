@@ -27,7 +27,7 @@ import pandas as pd
 
 from . import backtest, evaluate, report
 from .config import LEAGUES, MAJOR, Settings, market_group
-from .data import espn
+from .data import espn, footballdata as fd
 from .data.espn import Fixture
 from .predictor import LeaguePredictor
 from . import storage
@@ -72,6 +72,7 @@ def cmd_fixtures(a):
 def cmd_predict(a):
     s = _settings(a)
     by_league, records = {}, []
+    idle = {}   # league name -> next kick-off beyond the window (None if none found)
     for key in _leagues(a.league):
         p = LeaguePredictor(key, s, offline=a.offline)
         fx = p.fixtures(a.days)
@@ -80,6 +81,9 @@ def cmd_predict(a):
             fx = [f for f in fx if needle in f.home.lower() or needle in f.away.lower()]
         if not fx:
             print(f"[{key}] no upcoming fixtures in the next {a.days} days")
+            if not a.team:   # keep the league on the main page, with its next fixture date
+                later = p.fixtures(LOOKAHEAD_DAYS)
+                idle[LEAGUES[key].name] = later[0].kickoff if later else None
             continue
         p.prepare()
         print(f"[{key}] analysing {len(fx)} fixtures (form + head-to-head across all competitions)")
@@ -95,7 +99,7 @@ def cmd_predict(a):
                 store.add_live(pr, key, version, now)
             store.close()
             print(f"[{key}] logged {len(preds)} predictions (model version {version})")
-    _write_outputs(a, by_league, records)
+    _write_outputs(a, by_league, records, idle, a.days)
 
 
 def _entered_odds(event_ids) -> dict:
@@ -151,8 +155,9 @@ def cmd_settle(a):
         print("nothing to settle")
         return store.close()
     pending["day"] = pd.to_datetime(pending["kickoff"], utc=True).dt.date
-    settled = 0
-    for (league, day), g in pending.groupby(["league", "day"]):
+    is_fd = pending["event_id"].astype(str).str.startswith("fd:")
+    settled = _settle_from_football_data(store, pending[is_fd])
+    for (league, day), g in pending[~is_fd].groupby(["league", "day"]):
         by_id = _fixtures_by_id(league, day, ttl=600)
         for ev in g["event_id"]:
             f = by_id.get(ev)
@@ -161,6 +166,25 @@ def cmd_settle(a):
                 settled += 1
     store.close()
     print(f"settled {settled} of {len(pending)} finished fixtures")
+
+
+def _settle_from_football_data(store, pending) -> int:
+    """Results for fixtures only football-data knows (e.g. leagues ESPN doesn't cover)."""
+    n = 0
+    for league, g in pending.groupby("league"):
+        lg = LEAGUES[league]
+        hist = fd.load_history([lg.fd_code], 1, datetime.now(timezone.utc).date(), calendar=lg.calendar)
+        hist = hist.dropna(subset=["hg", "ag"])
+        for ev in g["event_id"]:
+            parsed = fd.parse_fd_event_id(ev)
+            if parsed is None:
+                continue
+            _, day, home, away = parsed
+            m = hist[(hist["home"] == home) & (hist["away"] == away) & ((hist["date"] - day).abs().dt.days <= 1)]
+            if len(m):
+                store.add_result(ev, league, int(m["hg"].iloc[0]), int(m["ag"].iloc[0]), "football-data")
+                n += 1
+    return n
 
 
 def cmd_snapshot_odds(a):
@@ -172,6 +196,18 @@ def cmd_snapshot_odds(a):
         return store.close()
     up["day"] = pd.to_datetime(up["kickoff"], utc=True).dt.date
     n = 0
+    is_fd = up["event_id"].astype(str).str.startswith("fd:")
+    for league, g in up[is_fd].groupby("league"):
+        fx = fd.load_fixtures(LEAGUES[league].fd_code, ttl=300)
+        for ev in g["event_id"]:
+            _, day, home, away = fd.parse_fd_event_id(ev)
+            m = fx[(fx["home"] == home) & (fx["away"] == away)]
+            if len(m) and pd.notna(m["odds_h"].iloc[0]):
+                r = m.iloc[0]
+                store.add_odds(ev, now, "closing", {"H": r.odds_h, "D": r.odds_d, "A": r.odds_a,
+                                                     "source": "football-data avg"})
+                n += 1
+    up = up[~is_fd]
     for (league, day), g in up.groupby(["league", "day"]):
         by_id = _fixtures_by_id(league, day, ttl=300)
         for ev in g["event_id"]:
@@ -341,6 +377,9 @@ def cmd_db(a):
     store.close()
 
 
+LOOKAHEAD_DAYS = 45   # how far to look for an idle league's next fixture
+
+
 def cmd_match(a):
     s = _settings(a)
     key = _leagues([a.league])[0]
@@ -385,7 +424,7 @@ def cmd_backtest(a):
             print("saved to ensemble_weights.json - used automatically for", key)
 
 
-def _write_outputs(a, by_league, records):
+def _write_outputs(a, by_league, records, idle: dict | None = None, days: int | None = None):
     for opt in ("json", "csv", "html"):
         if getattr(a, opt, None):
             Path(getattr(a, opt)).parent.mkdir(parents=True, exist_ok=True)
@@ -395,7 +434,7 @@ def _write_outputs(a, by_league, records):
     if getattr(a, "csv", None):
         report.write_csv(records, Path(a.csv))
         print(f"wrote {a.csv}")
-    if getattr(a, "html", None) and by_league:
+    if getattr(a, "html", None) and (by_league or idle):
         path = Path(a.html)
         now = datetime.now(timezone.utc)
         tr = _track_record_page()
@@ -406,7 +445,7 @@ def _write_outputs(a, by_league, records):
                 report.page("MBTgrandaudit track record", tr[0], now,
                             f'<a href="{path.name}">← Predictions</a>'), encoding="utf-8")
             print(f"wrote {path.with_name(tr_name)}")
-        for f in report.html_report(by_league, path, now, tr_name):
+        for f in report.html_report(by_league, path, now, tr_name, idle, days):
             print(f"wrote {f}")
         if a.open:
             webbrowser.open(path.resolve().as_uri())

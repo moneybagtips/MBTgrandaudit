@@ -131,7 +131,8 @@ h1{font-size:24px;margin:0 0 4px}h2{font-size:17px;margin:0}.mute{color:var(--mu
 font-weight:600;font-size:12px;margin:2px 4px 2px 0}
 a{color:var(--bar);text-decoration:none}a:hover{text-decoration:underline}
 .nav{margin-bottom:12px;font-size:13px}.jump{line-height:1.9;font-size:13px}
-.tile{display:block;color:var(--ink)}.tile:hover{border-color:var(--bar);text-decoration:none}
+.tile{display:block;color:var(--ink)}a.tile:hover{border-color:var(--bar);text-decoration:none}
+.tile.idle{opacity:.6;border-style:dashed}
 .pick.value{background:var(--acc);color:var(--card)}
 .pick.low{background:transparent;color:var(--mute);border:1px solid var(--line)}
 table{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
@@ -248,9 +249,12 @@ def _match_card(p) -> str:
 
 
 def html_report(preds_by_league: dict, path: Path, generated: datetime,
-                track_record: str | None = "track_record.html") -> list[Path]:
+                track_record: str | None = "track_record.html", idle: dict | None = None,
+                days: int | None = None) -> list[Path]:
     """Main page at ``path`` plus one page per league beside it. ``track_record`` is the
-    track-record page to link to (None: not available yet). Returns the files written."""
+    track-record page to link to (None: not available yet). ``idle`` maps leagues with no
+    fixtures in the window to their next kick-off (or None), so they still get a tile.
+    Returns the files written."""
     path = Path(path)
     main_name = path.name
     tr_link = (f'<a href="{html.escape(track_record)}">Track record</a>' if track_record
@@ -323,6 +327,13 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
                   f'<span class="mute">{span}</span></div>'
                   f'<div class="row mute"><span>{value} VALUE pick{"s" if value != 1 else ""}</span>'
                   f'<span>View →</span></div></a>')
+    window = f"the next {days} days" if days else "this window"
+    for league, nxt in (idle or {}).items():
+        when = (f'Next: {nxt.astimezone().strftime("%a %d %b")}' if nxt is not None
+                else "Next fixture not published yet")
+        tiles += (f'<div class="box tile idle"><h3>{html.escape(league)}</h3>'
+                  f'<div class="row"><b>No fixtures</b><span class="mute">in {window}</span></div>'
+                  f'<div class="row mute"><span>{when}</span></div></div>')
     leagues_card = f'<div class="card"><h2>Leagues</h2><div class="grid">{tiles}</div></div>'
     if track_record:
         tr_card = (f'<div class="card"><div class="head"><h2>Track record</h2>'

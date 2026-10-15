@@ -17,6 +17,7 @@ class League:
     fd_code: str             # football-data.co.uk division code
     espn_code: str           # ESPN league slug
     lower_fd_code: str | None = None  # second tier, used to rate promoted teams
+    calendar: bool = False   # season runs within a calendar year (MLS, Nordic leagues)
 
 
 LEAGUES: dict[str, League] = {
@@ -34,6 +35,13 @@ LEAGUES: dict[str, League] = {
         League("SUPERLIG", "Turkish Super Lig", "T1", "tur.1"),
         League("SPL", "Scottish Premiership", "SC0", "sco.1", "SC1"),
         League("GREECE", "Greek Super League", "G1", "gre.1"),
+        # football-data.co.uk "extra" leagues: one file per country, closing odds only
+        League("SWISS", "Swiss Super League", "SWZ", "sui.1"),
+        League("MLS", "Major League Soccer", "USA", "usa.1", calendar=True),
+        League("DENMARK", "Danish Superliga", "DNK", "den.1"),
+        League("NORWAY", "Norwegian Eliteserien", "NOR", "nor.1", calendar=True),
+        # J1 moved to an August-May season from 2026-27 (earlier seasons were calendar years)
+        League("JLEAGUE", "Japanese J1 League", "JPN", "jpn.1"),
     ]
 }
 
