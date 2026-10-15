@@ -40,6 +40,23 @@ BUILTIN = {
     "Heart of Midlothian": "Hearts", "Hibernian": "Hibernian", "Galatasaray": "Galatasaray",
     "Istanbul Basaksehir": "Buyuksehyr", "Goztepe": "Goztep",
     "Olympiacos": "Olympiakos", "PAOK Salonika": "PAOK",
+    # MLS
+    "LAFC": "Los Angeles FC", "Red Bull New York": "New York Red Bulls", "LA Galaxy": "Los Angeles Galaxy",
+    # Denmark
+    "AGF": "Aarhus", "F.C. København": "FC Copenhagen", "FC København": "FC Copenhagen",
+    "FC Copenhagen": "FC Copenhagen", "Randers": "Randers FC",
+    # Norway
+    "Hamarkameratene": "HamKam", "HamKam": "HamKam", "Bodø/Glimt": "Bodo/Glimt", "FK Bodø/Glimt": "Bodo/Glimt",
+    "Aalesunds FK": "Aalesund", "Lillestrøm": "Lillestrom", "Tromsø": "Tromso", "Tromsø IL": "Tromso",
+    "Rosenborg BK": "Rosenborg", "Molde FK": "Molde", "Sandefjord Fotball": "Sandefjord",
+    # Japan ("Tokyo Verdy" must not fuzzy-match "FC Tokyo")
+    "Tokyo Verdy 1969": "Verdy", "Tokyo Verdy": "Verdy", "Urawa Red Diamonds": "Urawa Reds",
+    "Yokohama F. Marinos": "Yokohama F. Marinos", "Yokohama F Marinos": "Yokohama F. Marinos",
+    # Switzerland
+    "BSC Young Boys": "Young Boys", "FC Basel": "Basel", "FC Zürich": "Zurich", "FC Lugano": "Lugano",
+    "FC Luzern": "Luzern", "FC St. Gallen": "St. Gallen", "FC Sion": "Sion", "FC Thun": "Thun",
+    "Grasshopper Club Zürich": "Grasshoppers", "Grasshopper": "Grasshoppers", "Servette FC": "Servette",
+    "FC Lausanne-Sport": "Lausanne", "FC Vaduz": "Vaduz",
 }
 
 _STOP = {"fc", "cf", "afc", "sc", "ac", "as", "cd", "ud", "sd", "rc", "rcd", "ss", "us", "vfb", "vfl",

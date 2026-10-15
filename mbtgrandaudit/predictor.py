@@ -115,8 +115,8 @@ class LeaguePredictor:
         lg, today = self.league, self.as_of.date()
         divs = [lg.fd_code] + ([lg.lower_fd_code] if lg.lower_fd_code else [])
         self.log(f"[{lg.key}] loading {self.s.seasons} seasons of results ({', '.join(divs)})")
-        self.hist = fd.load_history(divs, self.s.seasons, today, self.offline)
-        self.h2h_hist = fd.load_history(divs, self.s.h2h_seasons, today, self.offline)
+        self.hist = fd.load_history(divs, self.s.seasons, today, self.offline, lg.calendar)
+        self.h2h_hist = fd.load_history(divs, self.s.h2h_seasons, today, self.offline, lg.calendar)
         if self.hist.empty:
             raise RuntimeError(f"No historical data for {lg.name}")
         top = self.hist[(self.hist["div"] == lg.fd_code) & (self.hist["date"] < self.as_of)]
@@ -124,7 +124,7 @@ class LeaguePredictor:
         recent_top = recent_top if len(recent_top) > 100 else top
         self.league_hg = float(recent_top["hg"].mean())
         self.league_ag = float(recent_top["ag"].mean())
-        cur = fd.season_start_year(today)
+        cur = fd.league_season(today, lg.calendar)
         cur_teams = top[top["season"] == cur]
         if len(cur_teams) < 10:
             cur_teams = top[top["season"] == top["season"].max()]
@@ -148,13 +148,17 @@ class LeaguePredictor:
         if not fx:
             df = fd.load_fixtures(self.league.fd_code, self.offline)
             end = pd.Timestamp(start) + pd.Timedelta(days=days)
+            now = pd.Timestamp(self.now)
             for r in df[(df["date"] >= pd.Timestamp(start)) & (df["date"] < end)].itertuples():
-                odds = {k: v for k, v in (("H", r.odds_h), ("D", r.odds_d), ("A", r.odds_a),
-                                          ("over", r.odds_o25), ("under", r.odds_u25)) if pd.notna(v)}
+                if pd.isna(r.kickoff) or r.kickoff <= now:
+                    continue
+                odds = {k: float(v) for k, v in (("H", r.odds_h), ("D", r.odds_d), ("A", r.odds_a),
+                                                 ("over", r.odds_o25), ("under", r.odds_u25)) if pd.notna(v)}
                 if "over" in odds:
                     odds["line"] = 2.5
-                fx.append(espn.Fixture(f"fd-{r.home}-{r.away}", r.date.to_pydatetime(), self.league.fd_code,
-                                       r.home, r.away, odds=odds | {"source": "football-data avg"}))
+                fx.append(espn.Fixture(fd.fd_event_id(self.league.fd_code, r.date, r.home, r.away),
+                                       r.kickoff.to_pydatetime(), self.league.fd_code, r.home, r.away,
+                                       odds=odds | {"source": "football-data avg"} if odds else {}))
         return [f for f in fx if f.status not in ("completed", "post", "in")]
 
     def resolve(self, name: str) -> str | None:
@@ -164,7 +168,7 @@ class LeaguePredictor:
     def _espn_matches(self, team_id: str | None) -> pd.DataFrame:
         if not team_id or str(team_id).startswith("fd-"):
             return pd.DataFrame()
-        cur = fd.season_start_year(self.as_of.date())
+        cur = fd.league_season(self.as_of.date(), self.league.calendar)
         try:
             return espn.team_matches(team_id, self.league.espn_code, [cur - 1, cur], cur, self.offline)
         except Exception:

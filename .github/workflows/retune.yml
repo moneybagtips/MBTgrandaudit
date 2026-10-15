@@ -9,7 +9,7 @@ on:
     inputs:
       leagues:
         description: "League keys (space separated) or 'all'"
-        default: EPL LALIGA BUNDES SERIEA LIGUE1
+        default: EPL LALIGA BUNDES SERIEA LIGUE1 SWISS MLS DENMARK NORWAY JLEAGUE
 
 concurrency:
   group: retune
@@ -35,7 +35,7 @@ jobs:
           restore-keys: data-cache-
       - run: >
           python -m mbtgrandaudit backtest
-          -l ${{ inputs.leagues || 'EPL LALIGA BUNDES SERIEA LIGUE1' }}
+          -l ${{ inputs.leagues || 'EPL LALIGA BUNDES SERIEA LIGUE1 SWISS MLS DENMARK NORWAY JLEAGUE' }}
           --seasons 2 --save-weights
       - name: Commit weights
         run: |

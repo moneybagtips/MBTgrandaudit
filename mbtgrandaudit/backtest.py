@@ -10,7 +10,7 @@ from scipy.optimize import minimize
 
 from .config import LEAGUES, WEIGHTS_FILE, Settings
 from .data import footballdata as fd
-from .markets import markets
+from .markets import demargin, markets
 from .models import MatchContext, build_models, ensemble, load_weights
 from .features import extract as extract_features
 from .implied import implied_matrix
@@ -48,9 +48,9 @@ def run(league_key: str, test_seasons: int = 1, settings: Settings | None = None
     s = settings or Settings()
     lg = LEAGUES[league_key]
     today = today or date.today()
-    cur = fd.season_start_year(today)
+    cur = fd.league_season(today, lg.calendar)
     divs = [lg.fd_code] + ([lg.lower_fd_code] if lg.lower_fd_code else [])
-    hist = fd.load_history(divs, s.seasons + test_seasons, today, offline)
+    hist = fd.load_history(divs, s.seasons + test_seasons, today, offline, lg.calendar)
     hist = hist[hist["season"] < cur]                      # completed seasons only
     test = hist[(hist["div"] == lg.fd_code) & (hist["season"] >= cur - test_seasons)].dropna(subset=["hg", "ag"])
     if test.empty:
@@ -65,7 +65,7 @@ def run(league_key: str, test_seasons: int = 1, settings: Settings | None = None
     names = [m.name for m in build_models(s)] + ["market_view", "ensemble"]
     for i, (_, wk) in enumerate(test.groupby(week)):
         as_of = wk["date"].min().normalize()
-        first = fd.season_start_year(as_of.date()) - s.seasons + 1
+        first = fd.league_season(as_of.date(), lg.calendar) - s.seasons + 1
         train = hist[(hist["date"] < as_of) & (hist["season"] >= first)]
         models = [m.fit(train, as_of, lg.fd_code) for m in build_models(s)]
         top = train[(train["div"] == lg.fd_code) & (train["date"] >= as_of - pd.Timedelta(days=400))]
@@ -100,10 +100,13 @@ def run(league_key: str, test_seasons: int = 1, settings: Settings | None = None
                           "hit": max(("home", "draw", "away"), key=mk.get) ==
                           ("home" if hg > ag else "draw" if hg == ag else "away"),
                           "available": mat is not None}
-            # bookmaker benchmark (closing-ish average odds from football-data)
-            if pd.notna(r.odds_h) and pd.notna(r.odds_d) and pd.notna(r.odds_a):
-                inv = np.array([1 / r.odds_h, 1 / r.odds_d, 1 / r.odds_a])
-                inv /= inv.sum()
+            # bookmaker benchmark: pre-match average odds, else closing odds (the "extra"
+            # leagues only publish closing odds; fine for a benchmark, no prediction uses them)
+            oh, od, oa = r.odds_h, r.odds_d, r.odds_a
+            if not (pd.notna(oh) and pd.notna(od) and pd.notna(oa)):
+                oh, od, oa = r.odds_ch, r.odds_cd, r.odds_ca
+            if pd.notna(oh) and pd.notna(od) and pd.notna(oa):
+                inv = np.array(demargin([oh, od, oa]))
                 res = 0 if hg > ag else 1 if hg == ag else 2
                 book = {"1x2": inv[res], "rps": _rps(dict(zip(("home", "draw", "away"), inv)), hg, ag),
                         "hit": int(np.argmax(inv)) == res}
@@ -148,7 +151,8 @@ def summarise(result: dict) -> pd.DataFrame:
     out = {}
     for n in result["models"] + ["bookmaker"]:
         recs = [r[n] for r in rows if n in r]
-        if not recs:
+        # skip components missing in most games (their rows hold Dixon-Coles stand-ins)
+        if not recs or np.mean([x.get("available", True) for x in recs]) <= 0.5:
             continue
         d = {"matches": len(recs)}
         for k in MARKET_KEYS:
@@ -164,7 +168,9 @@ def summarise(result: dict) -> pd.DataFrame:
 def optimise_weights(result: dict, settings: Settings | None = None) -> dict:
     """Ensemble weights minimising combined log loss across all target markets."""
     s = settings or Settings()
-    names = [n for n in result["models"] if n != "ensemble"]
+    rows = result["rows"]
+    names = [n for n in result["models"] if n != "ensemble"
+             and np.mean([r[n]["available"] for r in rows]) > 0.5]
     P = np.array([[[r[n][k] for k in MARKET_KEYS] for n in names] for r in result["rows"]])  # (N, M, K)
 
     def loss(z):
