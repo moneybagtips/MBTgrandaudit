@@ -1,7 +1,7 @@
-.cache/
+/.cache/
 __pycache__/
 *.pyc
-reports/
+/reports/
 .pytest_cache/
-data/
+/data/
 .env
