@@ -11,6 +11,7 @@ prediction log. Once set up, nothing runs on your PC.
 | `Re-tune ensemble weights` | monthly | backtests the big five and commits new `ensemble_weights.json` |
 | `Tests` | on every push | runs the test suite against SQLite and a throwaway Postgres |
 | `Keepalive` | monthly | re-enables all scheduled workflows (see "Public repository" below) |
+| `Odds entry` | when you open an `Odds: …` issue | saves prices from the odds form, replies with the edges, closes the issue and re-runs Predict (owner's issues only; see README "Entering odds") |
 
 All of them can also be started by hand: **Actions** tab, pick the workflow, **Run workflow**.
 

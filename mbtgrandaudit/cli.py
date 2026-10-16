@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
+import subprocess
 import sys
 import webbrowser
 from datetime import datetime, timedelta, timezone
@@ -342,6 +345,80 @@ def _add_one(store, home, away, market, odds, bookmaker, now) -> str:
     return line
 
 
+def _github_repo() -> str | None:
+    """owner/repo for the odds form's issue link: from Actions, else the git remote."""
+    if os.environ.get("GITHUB_REPOSITORY"):
+        return os.environ["GITHUB_REPOSITORY"]
+    try:
+        url = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True,
+                             cwd=Path(__file__).resolve().parent.parent, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", url)
+    return m.group(1) if m else None
+
+
+def _parse_issue(text: str) -> tuple[str, list[tuple[str, str, str, str]]]:
+    """Bookmaker and (event id, market, odds, match label) lines from an odds-form issue."""
+    bookmaker, lines = "", []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("<!--", ">", "#")):   # comments, the format line
+            continue
+        m = re.match(r"(?i)bookmaker\s*:\s*(.*)$", line)
+        if m:
+            bookmaker = m.group(1).strip()
+            continue
+        parts = [x.strip() for x in line.split("|")]
+        if len(parts) >= 3:
+            lines.append((parts[0], parts[1], parts[2], parts[3] if len(parts) > 3 else ""))
+    return bookmaker, lines
+
+
+def _apply_issue(store, text: str, now) -> tuple[str, int]:
+    """Save the prices from an odds-form issue; return a Markdown report and how many were saved."""
+    bookmaker, lines = _parse_issue(text)
+    need_all = Settings().min_edge
+    rows, problems, saved = [], [], 0
+    for ev, market, odds_s, label in lines:
+        what = label or ev
+        try:
+            key, odds = _market_key(market), float(odds_s.replace(",", "."))
+            if odds <= 1:
+                raise ValueError("odds must be above 1.00")
+        except ValueError as e:
+            problems.append(f"- {what}: `{market} {odds_s}` skipped ({e})")
+            continue
+        pred = store.latest_prediction(ev)
+        if pred is None:
+            problems.append(f"- {what}: unknown fixture `{ev}` (not in the prediction log)")
+            continue
+        if pd.Timestamp(pred["kickoff"]) <= pd.Timestamp(now):
+            problems.append(f"- {pred['home']} v {pred['away']}: skipped, already kicked off")
+            continue
+        store.add_market_odds(ev, key, odds, now, "manual", bookmaker)
+        saved += 1
+        mk = json.loads(pred["markets"])
+        prob = mk.get(key)
+        if prob:
+            edge, need = prob * odds - 1, need_all.get(market_group(key), 0.03)
+            verdict = f"**VALUE**" if edge >= need else "no value"
+            rows.append(f"| {pred['home']} v {pred['away']} | {key} | {odds:.2f} | {prob:.1%} | {1 / prob:.2f} | "
+                        f"{edge:+.1%} | {verdict} (needs {need:.0%}) |")
+        else:
+            rows.append(f"| {pred['home']} v {pred['away']} | {key} | {odds:.2f} | – | – | – | saved |")
+    store.commit()
+    out = [f"Saved **{saved}** of {len(lines)} price{'s' if len(lines) != 1 else ''}"
+           + (f" (bookmaker: {bookmaker})" if bookmaker else "") + "."]
+    if rows:
+        out += ["", "| Match | Market | Odds | Model | Fair | Edge | Verdict |", "|---|---|---|---|---|---|---|"] + rows
+    if problems:
+        out += ["", "Not saved:"] + problems
+    out += ["", "_Edges use the latest logged prediction. A VALUE verdict marks where the model disagrees with "
+                "the price, not a bet to place. The prediction pages refresh in a few minutes._"]
+    return "\n".join(out), saved
+
+
 def cmd_odds(a):
     store = Store()
     now = datetime.now(timezone.utc)
@@ -356,6 +433,12 @@ def cmd_odds(a):
             for r in df.itertuples():
                 print(_add_one(store, r.home, r.away, r.market, float(r.odds),
                                getattr(r, "bookmaker", "") if "bookmaker" in df.columns else "", now))
+        elif a.action == "from-issue":
+            text = Path(a.file).read_text(encoding="utf-8") if a.file != "-" else sys.stdin.read()
+            md, _ = _apply_issue(store, text, now)
+            print(md)
+            if a.report:
+                Path(a.report).write_text(md, encoding="utf-8")
         else:  # list
             mo = store.query("SELECT m.*, p.home, p.away, p.kickoff FROM market_odds m JOIN"
                              " (SELECT DISTINCT event_id, home, away, kickoff FROM predictions"
@@ -463,7 +546,8 @@ def _write_outputs(a, by_league, records, idle: dict | None = None, days: int | 
             tr_name = "track_record.html"
             for f in _write_track_record(path.with_name(tr_name), tr[0], tr[1], now, path.name):
                 print(f"wrote {f}")
-        for f in report.html_report(by_league, path, now, tr_name, idle, days):
+        for f in report.html_report(by_league, path, now, tr_name, idle, days, _github_repo(),
+                                    _settings(a).min_edge):
             print(f"wrote {f}")
         if a.open:
             webbrowser.open(path.resolve().as_uri())
@@ -532,6 +616,9 @@ def main(argv=None):
     q.add_argument("--bookmaker")
     q = osub.add_parser("import", help="CSV with columns home, away, market, odds[, bookmaker]")
     q.add_argument("file")
+    q = osub.add_parser("from-issue", help="import prices from an odds-form GitHub issue body")
+    q.add_argument("file", help="file holding the issue body ('-' for stdin)")
+    q.add_argument("--report", help="write the Markdown reply to this file")
     q = osub.add_parser("list", help="show entered odds")
     q.add_argument("--days", type=int, default=1, help="include fixtures from this many days ago")
     p.set_defaults(fn=cmd_odds)

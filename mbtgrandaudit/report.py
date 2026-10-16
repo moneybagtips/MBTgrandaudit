@@ -142,6 +142,11 @@ font:inherit;font-size:12.5px;cursor:pointer}
 .hit{color:var(--acc)}.miss{color:var(--bar3)}td.hit,td.miss{white-space:nowrap}
 th.l,td.l{text-align:left}.nw{white-space:nowrap}
 .note{border-left:4px solid var(--warn)}
+table.odds input.price{width:68px;padding:3px 4px;border:1px solid var(--line);border-radius:6px;
+background:var(--card);color:var(--ink);font:inherit;font-size:12.5px}
+table.odds td{vertical-align:top}.edge{display:inline-block;min-width:3.5em;margin-left:4px;font-size:12px}
+.small{font-size:11px}#bookmaker{padding:3px 6px;border:1px solid var(--line);border-radius:6px;
+background:var(--card);color:var(--ink);font:inherit}
 .pick.value{background:var(--acc);color:var(--card)}
 .pick.low{background:transparent;color:var(--mute);border:1px solid var(--line)}
 table{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
@@ -309,6 +314,103 @@ def filter_chips(leagues) -> str:
 
 
 VALUES_FILE = "values.html"
+ODDS_FILE = "odds.html"
+FORM_MARKETS = [("gg2_yes", "GG2+ Yes"), ("gg2_no", "GG2+ No"), ("btts_yes", "BTTS Yes"), ("btts_no", "BTTS No")]
+
+# Odds entry form: live edge per box; "Open GitHub issue" builds a pre-filled issue that the
+# odds-entry workflow imports (one line per price: event id | market | odds | match).
+ODDS_JS = r"""(function(){
+var form=document.getElementById('odds-form'); if(!form){return;}
+var repo=form.dataset.repo, need=JSON.parse(form.dataset.need);
+function group(m){return m.split('_')[0];}
+function entries(){
+  var out=[];
+  form.querySelectorAll('input.price').forEach(function(i){
+    var o=parseFloat((i.value||'').replace(',','.'));
+    if(o>1){var r=i.closest('tr');out.push({ev:r.dataset.event,label:r.dataset.label,home:r.dataset.home,
+      away:r.dataset.away,market:i.dataset.market,odds:o.toFixed(2)});}
+  });
+  return out;
+}
+function refresh(){
+  form.querySelectorAll('input.price').forEach(function(i){
+    var o=parseFloat((i.value||'').replace(',','.')), p=parseFloat(i.dataset.p), out=i.nextElementSibling;
+    if(!(o>1)){out.textContent='';out.className='edge';return;}
+    var e=p*o-1, ok=e>=need[group(i.dataset.market)];
+    out.textContent=(e>=0?'+':'')+Math.round(e*100)+'%'+(ok?' VALUE':'');
+    out.className='edge '+(ok?'hit':'miss');
+  });
+  var n=entries().length;
+  document.getElementById('odds-count').textContent=n+' price'+(n===1?'':'s')+' entered';
+}
+function body(es){
+  var bm=document.getElementById('bookmaker').value.trim();
+  return 'Odds entered on the MBTgrandaudit odds form.\n'+(bm?'Bookmaker: '+bm+'\n':'')+
+    '\n> Format: event id | market | decimal odds | match\n\n'+
+    es.map(function(e){return e.ev+' | '+e.market+' | '+e.odds+' | '+e.label;}).join('\n')+'\n';
+}
+function csv(es){
+  var bm=document.getElementById('bookmaker').value.trim(), q=function(s){return '"'+String(s).replace(/"/g,'""')+'"';};
+  return 'home,away,market,odds,bookmaker\n'+es.map(function(e){
+    return [q(e.home),q(e.away),e.market,e.odds,q(bm)].join(',');}).join('\n')+'\n';
+}
+form.addEventListener('input',refresh);
+document.getElementById('odds-submit').addEventListener('click',function(){
+  var es=entries(), msg=document.getElementById('odds-msg');
+  if(!es.length){msg.textContent='Enter at least one price first.';return;}
+  document.getElementById('odds-csv').value=csv(es);
+  if(!repo){msg.textContent='GitHub repository unknown: copy the CSV below and run odds import.';return;}
+  var title='Odds: '+es.length+' price'+(es.length===1?'':'s')+' ('+new Date().toISOString().slice(0,10)+')';
+  window.open('https://github.com/'+repo+'/issues/new?title='+encodeURIComponent(title)+
+              '&body='+encodeURIComponent(body(es)),'_blank','noopener');
+  msg.textContent='A pre-filled GitHub issue has opened in a new tab: press "Create" to submit.';
+});
+document.getElementById('odds-csv-btn').addEventListener('click',function(){
+  document.getElementById('odds-csv').value=csv(entries());
+});
+refresh();
+})();"""
+
+
+def _odds_form_body(preds_by_league: dict, link, repo: str | None, min_edge: dict) -> str:
+    """Odds entry form for markets bookmakers rarely quote on ESPN (GG2+, BTTS)."""
+    sections = ""
+    for league, preds in preds_by_league.items():
+        rows = ""
+        for p in sorted(preds, key=lambda p: p.fixture.kickoff):
+            fx, e = p.fixture, p.ensemble
+            label = f"{fx.home} v {fx.away}"
+            cells = "".join(
+                f'<td><input class="price" type="number" inputmode="decimal" step="0.01" min="1.01" '
+                f'data-market="{key}" data-p="{e[key]:.6f}" placeholder="fair {1 / e[key]:.2f}" '
+                f'aria-label="{html.escape(label)} {name} odds"><span class="edge"></span>'
+                f'<div class="mute small">model {pct(e[key])}</div></td>' for key, name in FORM_MARKETS)
+            rows += (f'<tr data-event="{html.escape(str(fx.event_id))}" data-label="{html.escape(label)}" '
+                     f'data-home="{html.escape(fx.home)}" data-away="{html.escape(fx.away)}">'
+                     f'<td class="nw">{_local(fx.kickoff)}</td><td class="l">{link(league, fx)}</td>{cells}</tr>')
+        heads = "".join(f"<th>{name}</th>" for _, name in FORM_MARKETS)
+        sections += (f'<h3 style="margin:18px 0 6px">{html.escape(league)}</h3><div class="scroll"><table class="odds">'
+                     f'<thead><tr><th>Kick-off</th><th class="l">Match</th>{heads}</tr></thead>'
+                     f'<tbody>{rows}</tbody></table></div>')
+    need = json.dumps({k: v for k, v in min_edge.items()})
+    how = ("Press <b>Open GitHub issue</b>: a pre-filled issue opens in a new tab. Press <b>Create</b> and a "
+           "GitHub Action saves the prices, replies with each edge and refreshes these pages a few minutes later. "
+           "Only issues opened by the repository owner are processed."
+           if repo else "This copy of the page doesn't know its GitHub repository, so use the CSV below.")
+    return (f'<div class="card note">Enter decimal odds for any market below, then submit them all at once. '
+            f'{how} Prices only count if entered before kick-off.</div>'
+            f'<div class="card" id="odds-form" data-repo="{html.escape(repo or "")}" data-need=\'{need}\'>'
+            '<div class="row" style="align-items:center;flex-wrap:wrap;gap:8px">'
+            '<label>Bookmaker <input id="bookmaker" type="text" placeholder="optional, e.g. Bet365"></label>'
+            '<span class="mute" id="odds-count"></span></div>'
+            f'{sections}'
+            '<div class="row" style="margin-top:14px;flex-wrap:wrap;gap:8px;justify-content:flex-start">'
+            '<button type="button" class="chip chip-all" id="odds-submit">Open GitHub issue</button>'
+            '<button type="button" class="chip" id="odds-csv-btn">Show as CSV</button>'
+            '<span class="mute" id="odds-msg" role="status"></span></div>'
+            '<details style="margin-top:10px"><summary>CSV for <code>python -m mbtgrandaudit odds import '
+            'my_prices.csv</code></summary><textarea id="odds-csv" rows="6" readonly '
+            'style="width:100%;margin-top:6px;font:12px monospace"></textarea></details></div>')
 
 
 def _picks_table(items, link) -> str:
@@ -388,7 +490,8 @@ def _draws_table(ranked, link, limit: int | None = None) -> str:
 
 def html_report(preds_by_league: dict, path: Path, generated: datetime,
                 track_record: str | None = "track_record.html", idle: dict | None = None,
-                days: int | None = None) -> list[Path]:
+                days: int | None = None, repo: str | None = None,
+                min_edge: dict | None = None) -> list[Path]:
     """Main page at ``path`` plus one page per league beside it. ``track_record`` is the
     track-record page to link to (None: not available yet). ``idle`` maps leagues with no
     fixtures in the window to their next kick-off (or None), so they still get a tile.
@@ -398,7 +501,7 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
     tr_link = (f'<a href="{html.escape(track_record)}">Track record</a>' if track_record
                else '<span class="mute">Track record (none yet)</span>')
     nav = (f'<a href="{html.escape(main_name)}">← All leagues</a> · <a href="{DRAWS_FILE}">All draws</a>'
-           f' · {tr_link}')
+           f' · <a href="{ODDS_FILE}">Enter odds</a> · {tr_link}')
     written = []
 
     def link(lg, fx):
@@ -456,6 +559,13 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
                    encoding="utf-8")
     written.append(out)
 
+    # ---- odds entry form
+    out = path.with_name(ODDS_FILE)
+    form = _odds_form_body(preds_by_league, link, repo, min_edge or Settings().min_edge)
+    out.write_text(page("Enter odds", form, generated, nav).replace("</body>", f"<script>{ODDS_JS}</script></body>"),
+                   encoding="utf-8")
+    written.append(out)
+
     ranked = sorted(allp, key=lambda t: -t[1].ensemble["draw"])
     draws_card = (
         f'<div class="card"><div class="head"><h2>Likeliest draws</h2>'
@@ -488,7 +598,8 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
     leagues_card = (f'<div class="card"><h2>Leagues</h2><div class="grid">{tiles}</div>'
                     f'<div class="row" style="margin-top:12px"><span class="mute">{len(values)} VALUE '
                     f'pick{"s" if len(values) != 1 else ""} across all leagues</span>'
-                    f'<a href="{VALUES_FILE}">View all value picks →</a></div></div>')
+                    f'<span><a href="{ODDS_FILE}">Enter odds</a> · '
+                    f'<a href="{VALUES_FILE}">View all value picks →</a></span></div></div>')
     if track_record:
         tr_card = (f'<div class="card"><div class="head"><h2>Track record</h2>'
                    f'<a href="{html.escape(track_record)}">Open track record →</a></div>'
@@ -502,7 +613,8 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
             f'{len(MODEL_DESC)} components · probabilities, not certainties</div>'
             f'{leagues_card}<div class="card"><h2>Strongest calls by market</h2><div class="grid">'
             f'{"".join(boards)}</div></div>{draws_card}{tr_card}')
-    main = page("MBTgrandaudit predictions", body, generated, f'<a href="{DRAWS_FILE}">All draws</a> · {tr_link}')
+    main = page("MBTgrandaudit predictions", body, generated,
+                f'<a href="{DRAWS_FILE}">All draws</a> · <a href="{ODDS_FILE}">Enter odds</a> · {tr_link}')
     path.write_text(with_filter_js(main), encoding="utf-8")
     written.insert(0, path)
     return written
