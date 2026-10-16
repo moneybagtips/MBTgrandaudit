@@ -142,6 +142,26 @@ def _track_record_page(source: str | None = None) -> tuple[str, dict] | None:
     return None
 
 
+def _write_track_record(path: Path, card: str, ev: dict, now, home: str, games: bool | None = None) -> list[Path]:
+    """track_record.html (summary + latest settled games) and results.html (every game).
+    Game-by-game lists are for live predictions only (the backfill holds thousands)."""
+    if games is None:
+        games = set(ev["preds"]["source"]) == {"live"}
+    nav_home = f'<a href="{home}">← Predictions</a>'
+    written = []
+    body = card
+    if games:
+        body = evaluate.games_section_html(ev) + card
+        results = path.with_name(evaluate.RESULTS_FILE)
+        results.write_text(report.with_filter_js(report.page(
+            "Settled predictions", evaluate.games_page_body(ev), now,
+            f'{nav_home} · <a href="{path.name}">Track record</a>')), encoding="utf-8")
+        written.append(results)
+    path.write_text(report.with_filter_js(report.page("MBTgrandaudit track record", body, now, nav_home)),
+                    encoding="utf-8")
+    return [path] + written
+
+
 def _fixtures_by_id(league: str, day, ttl: float) -> dict:
     # ESPN groups games by US date, so look at the day either side as well
     fx = espn.fixtures(LEAGUES[league].espn_code, day - timedelta(days=1), 3, ttl=ttl)
@@ -270,9 +290,9 @@ def cmd_evaluate(a):
         path.parent.mkdir(parents=True, exist_ok=True)
         card = evaluate.card_html(f"Track record: {a.source}", ev["scores"], ev["baseline"],
                                   ev["calibration"], ev["bet_summary"], vs_market=ev["vs_market"])
-        path.write_text(report.page("MBTgrandaudit track record", card, datetime.now(timezone.utc),
-                                    '<a href="index.html">← Predictions</a>'), encoding="utf-8")
-        print(f"wrote {path}")
+        for f in _write_track_record(path, card, ev, datetime.now(timezone.utc), "index.html",
+                                     games=a.source == "live"):
+            print(f"wrote {f}")
     store.close()
 
 
@@ -441,10 +461,8 @@ def _write_outputs(a, by_league, records, idle: dict | None = None, days: int | 
         tr_name = None
         if tr is not None:
             tr_name = "track_record.html"
-            path.with_name(tr_name).write_text(
-                report.page("MBTgrandaudit track record", tr[0], now,
-                            f'<a href="{path.name}">← Predictions</a>'), encoding="utf-8")
-            print(f"wrote {path.with_name(tr_name)}")
+            for f in _write_track_record(path.with_name(tr_name), tr[0], tr[1], now, path.name):
+                print(f"wrote {f}")
         for f in report.html_report(by_league, path, now, tr_name, idle, days):
             print(f"wrote {f}")
         if a.open:
