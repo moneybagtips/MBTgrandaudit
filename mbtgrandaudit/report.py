@@ -133,6 +133,12 @@ a{color:var(--bar);text-decoration:none}a:hover{text-decoration:underline}
 .nav{margin-bottom:12px;font-size:13px}.jump{line-height:1.9;font-size:13px}
 .tile{display:block;color:var(--ink)}a.tile:hover{border-color:var(--bar);text-decoration:none}
 .tile.idle{opacity:.6;border-style:dashed}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+.chip{border:1px solid var(--line);border-radius:999px;padding:3px 10px;background:var(--card);color:var(--ink);
+font:inherit;font-size:12.5px;cursor:pointer}
+.chip[aria-pressed="true"]{border-color:var(--bar);background:var(--acc-soft)}
+.chip[aria-pressed="false"]{opacity:.5;text-decoration:line-through}
+.chip-all{font-weight:600}tr[hidden]{display:none}
 .pick.value{background:var(--acc);color:var(--card)}
 .pick.low{background:transparent;color:var(--mute);border:1px solid var(--line)}
 table{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
@@ -248,6 +254,76 @@ def _match_card(p) -> str:
 {models}</table></div></details>{warns}</div>"""
 
 
+DRAWS_FILE = "draws.html"
+
+# League filter for the draws tables. Rows carry data-league; excluded leagues are kept in
+# localStorage so the choice is shared by the main page and the full list. Each table
+# shows the first `data-limit` rows that survive the filter, renumbered.
+DRAWS_JS = """(function(){
+var KEY='mbt-draws-excluded', off;
+try{off=new Set(JSON.parse(localStorage.getItem(KEY)||'[]'));}catch(e){off=new Set();}
+function apply(){
+  document.querySelectorAll('table.draws').forEach(function(t){
+    var lim=parseInt(t.dataset.limit||'0',10)||Infinity, n=0;
+    t.querySelectorAll('tbody tr').forEach(function(r){
+      var show=!off.has(r.dataset.league)&&n<lim;
+      if(show){n++;r.querySelector('.rk').textContent=n;}
+      r.hidden=!show;
+    });
+    var empty=t.closest('.draws-wrap').querySelector('.draws-empty');
+    if(empty){empty.hidden=n>0;}
+  });
+  document.querySelectorAll('.chip[data-league]').forEach(function(c){
+    c.setAttribute('aria-pressed',String(!off.has(c.dataset.league)));
+  });
+  try{localStorage.setItem(KEY,JSON.stringify(Array.from(off)));}catch(e){}
+}
+document.querySelectorAll('.chip[data-league]').forEach(function(c){
+  c.addEventListener('click',function(){
+    var l=c.dataset.league; if(off.has(l)){off.delete(l);}else{off.add(l);} apply();
+  });
+});
+document.querySelectorAll('.chip-all').forEach(function(c){
+  c.addEventListener('click',function(){off.clear();apply();});
+});
+apply();
+})();"""
+
+
+def _draws_table(ranked, link, limit: int | None = None) -> str:
+    """Draw-probability table with a league filter. ``limit`` rows are shown after filtering."""
+    counts: dict[str, int] = {}
+    for lg, _ in ranked:
+        counts[lg] = counts.get(lg, 0) + 1
+    chips = "".join(f'<button type="button" class="chip" data-league="{slug(lg)}" aria-pressed="true">'
+                    f'{html.escape(lg)} <span class="mute">{n}</span></button>' for lg, n in sorted(counts.items()))
+    rows = ""
+    for i, (lg, p) in enumerate(ranked, 1):
+        e, fx = p.ensemble, p.fixture
+        h, a_, q = e["top_scores"][0]
+        mk = p.market.get("implied", {}).get("draw")
+        hidden = " hidden" if limit and i > limit else ""   # without JavaScript: plain top N
+        rows += (
+            f'<tr data-league="{slug(lg)}"{hidden}><td class="rk">{i}</td><td>{_local(fx.kickoff)}</td>'
+            f"<td>{html.escape(lg)}</td><td>{link(lg, fx)}</td><td><b>{pct(e['draw'])}</b></td>"
+            f"<td>{e['home'] * 100:.0f} / {e['away'] * 100:.0f}</td>"
+            f"<td>{e['xg_home']:.2f}–{e['xg_away']:.2f}</td><td>{h}-{a_} ({pct(q)})</td>"
+            f"<td>{pct(e['under_2.5'])}</td><td>{pct(mk) if mk else '–'}</td><td>{1 / e['draw']:.2f}</td></tr>")
+    scope = f"top {limit} of the leagues selected below" if limit else "every fixture, filtered by league"
+    return (
+        '<div class="draws-wrap">'
+        f'<div class="mute" style="margin:4px 0 8px">Fixtures ranked by ensemble draw probability ({scope}). '
+        'Draws rarely top 31%; a high value means an evenly matched, low-scoring game, '
+        'not that a draw is expected.</div>'
+        f'<div class="chips" role="group" aria-label="Filter by league">'
+        f'<button type="button" class="chip chip-all">Show all</button>{chips}</div>'
+        f'<div class="scroll"><table class="draws" data-limit="{limit or 0}"><thead>'
+        '<tr><th>#</th><th>Kick-off</th><th>League</th><th>Match</th><th>Draw</th><th>1 / 2</th>'
+        '<th>Exp. goals</th><th>Likeliest score</th><th>U2.5</th><th>Market draw</th><th>Fair</th></tr>'
+        f'</thead><tbody>{rows}</tbody></table></div>'
+        '<p class="mute draws-empty" hidden>No fixtures in the selected leagues.</p></div>')
+
+
 def html_report(preds_by_league: dict, path: Path, generated: datetime,
                 track_record: str | None = "track_record.html", idle: dict | None = None,
                 days: int | None = None) -> list[Path]:
@@ -259,7 +335,8 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
     main_name = path.name
     tr_link = (f'<a href="{html.escape(track_record)}">Track record</a>' if track_record
                else '<span class="mute">Track record (none yet)</span>')
-    nav = f'<a href="{html.escape(main_name)}">← All leagues</a> · {tr_link}'
+    nav = (f'<a href="{html.escape(main_name)}">← All leagues</a> · <a href="{DRAWS_FILE}">All draws</a>'
+           f' · {tr_link}')
     written = []
 
     def link(lg, fx):
@@ -296,25 +373,16 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
         board("GG2+ — likeliest Yes", [(p.ensemble["gg2_yes"], lg, p.fixture, "Yes") for lg, p in allp]),
     ]
 
-    draw_rows = ""
-    for i, (lg, p) in enumerate(sorted(allp, key=lambda t: -t[1].ensemble["draw"])[:20], 1):
-        e, fx = p.ensemble, p.fixture
-        h, a_, q = e["top_scores"][0]
-        mk = p.market.get("implied", {}).get("draw")
-        draw_rows += (
-            f"<tr><td>{i}</td><td>{_local(fx.kickoff)}</td><td>{html.escape(lg)}</td>"
-            f"<td>{link(lg, fx)}</td><td><b>{pct(e['draw'])}</b></td>"
-            f"<td>{e['home'] * 100:.0f} / {e['away'] * 100:.0f}</td>"
-            f"<td>{e['xg_home']:.2f}–{e['xg_away']:.2f}</td><td>{h}-{a_} ({pct(q)})</td>"
-            f"<td>{pct(e['under_2.5'])}</td><td>{pct(mk) if mk else '–'}</td><td>{1 / e['draw']:.2f}</td></tr>")
+    ranked = sorted(allp, key=lambda t: -t[1].ensemble["draw"])
     draws_card = (
-        '<div class="card"><h2>Likeliest draws</h2>'
-        '<div class="mute" style="margin:4px 0 8px">Fixtures ranked by ensemble draw probability. '
-        'Draws rarely top 31%; a high value means an evenly matched, low-scoring game, '
-        'not that a draw is expected.</div><div class="scroll"><table>'
-        '<tr><th>#</th><th>Kick-off</th><th>League</th><th>Match</th><th>Draw</th><th>1 / 2</th>'
-        '<th>Exp. goals</th><th>Likeliest score</th><th>U2.5</th><th>Market draw</th><th>Fair</th></tr>'
-        f'{draw_rows}</table></div></div>')
+        f'<div class="card"><div class="head"><h2>Likeliest draws</h2>'
+        f'<a href="{DRAWS_FILE}">View all {len(ranked)} draws →</a></div>'
+        + _draws_table(ranked, link, limit=20) + "</div>")
+    draws_page = page("Likeliest draws", f'<div class="card">{_draws_table(ranked, link)}</div>',
+                      generated, nav)
+    out = path.with_name(DRAWS_FILE)
+    out.write_text(draws_page.replace("</body>", f"<script>{DRAWS_JS}</script></body>"), encoding="utf-8")
+    written.append(out)
 
     tiles = ""
     for league, preds in preds_by_league.items():
@@ -348,6 +416,7 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
             f'{len(MODEL_DESC)} components · probabilities, not certainties</div>'
             f'{leagues_card}<div class="card"><h2>Strongest calls by market</h2><div class="grid">'
             f'{"".join(boards)}</div></div>{draws_card}{tr_card}')
-    path.write_text(page("MBTgrandaudit predictions", body, generated, tr_link), encoding="utf-8")
+    main = page("MBTgrandaudit predictions", body, generated, f'<a href="{DRAWS_FILE}">All draws</a> · {tr_link}')
+    path.write_text(main.replace("</body>", f"<script>{DRAWS_JS}</script></body>"), encoding="utf-8")
     written.insert(0, path)
     return written
