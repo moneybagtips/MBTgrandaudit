@@ -322,7 +322,7 @@ def evaluate(store: Store, source: str | None, league: str | None = None, versio
     has_market = bool(implied["home"].notna().any())
     bets = betting(store, preds, ens)
     table = scores(preds, probs | ({"market_implied": implied} if has_market else {}))
-    return {"preds": preds, "scores": table, "baseline": market_baseline(store, preds),
+    return {"preds": preds, "ensemble": ens, "scores": table, "baseline": market_baseline(store, preds),
             "calibration": calibration(preds, ens), "bets": bets, "bet_summary": betting_summary(bets),
             "vs_market": head_to_head(preds, ens, implied) if has_market else None}
 
@@ -330,3 +330,129 @@ def evaluate(store: Store, source: str | None, league: str | None = None, versio
 def summary_json(ev: dict) -> str:
     return json.dumps({"scores": ev["scores"].to_dict(orient="index"), "baseline": ev["baseline"],
                        "betting": ev["bet_summary"]}, indent=2, default=str)
+
+
+# ------------------------------------------------------------ settled games, one by one
+RESULTS_FILE = "results.html"
+GAME_MARKETS = [("1X2", None), ("BTTS", "btts"), ("GG2+", "gg2"), ("O/U 2.5", "over_2.5")]
+
+
+def _game_picks(e: pd.Series, hg: int, ag: int) -> list[tuple[str, str, float, bool]]:
+    """(market, pick, probability, correct) for the ensemble's call in each market."""
+    out = []
+    res = "home" if hg > ag else "draw" if hg == ag else "away"
+    sel = max(("home", "draw", "away"), key=lambda k: e[k])
+    out.append(("1X2", {"home": "1", "draw": "X", "away": "2"}[sel], float(e[sel]), sel == res))
+    for label, key in (("BTTS", "btts"), ("GG2+", "gg2")):
+        yes = e[f"{key}_yes"] >= 0.5
+        p = e[f"{key}_yes"] if yes else e[f"{key}_no"]
+        out.append((label, "Yes" if yes else "No", float(p), bool(outcome(f"{key}_{'yes' if yes else 'no'}", hg, ag))))
+    over = e["over_2.5"] >= 0.5
+    out.append(("O/U 2.5", "Over" if over else "Under", float(e["over_2.5"] if over else e["under_2.5"]),
+                bool(outcome("over_2.5" if over else "under_2.5", hg, ag))))
+    return out
+
+
+def settled_games(ev: dict) -> list[dict]:
+    """Every settled prediction with its picks and the result, newest first."""
+    from .config import LEAGUES
+    preds, ens, bets = ev["preds"], ev["ensemble"], ev["bets"]
+    bets_by_event = {} if bets.empty else {k: g for k, g in bets.groupby("event_id")}
+    games = []
+    for i in preds.index:
+        r = preds.loc[i]
+        hg, ag = int(r["hg"]), int(r["ag"])
+        m = unpack(r["matrix"])
+        sh, sa = np.unravel_index(np.argmax(m), m.shape)
+        vb = bets_by_event.get(r["event_id"])
+        games.append({
+            "kickoff": pd.Timestamp(r["kickoff"]), "league": LEAGUES[r["league"]].name if r["league"] in LEAGUES
+            else r["league"], "home": r["home"], "away": r["away"], "hg": hg, "ag": ag,
+            "picks": _game_picks(ens.loc[i], hg, ag),
+            "score_pick": (int(sh), int(sa), float(m[sh, sa])), "score_hit": (int(sh), int(sa)) == (hg, ag),
+            "value_bets": [] if vb is None else [
+                (b.selection, float(b.odds), bool(b.won)) for b in vb.itertuples()],
+        })
+    games.sort(key=lambda g: g["kickoff"], reverse=True)
+    return games
+
+
+def _sel_label(key: str) -> str:
+    if key in ("home", "draw", "away"):
+        return {"home": "1", "draw": "X", "away": "2"}[key]
+    side, _, rest = key.partition("_")
+    return {"btts": "BTTS ", "gg2": "GG2+ "}.get(side, side.capitalize() + " ") + (
+        rest.capitalize() if side in ("btts", "gg2") else rest)
+
+
+def games_summary_html(games: list[dict]) -> str:
+    """Hit rate per market vs. what the model expected (the mean probability of its picks)."""
+    if not games:
+        return ""
+    rows = ""
+    for idx, (label, _) in enumerate(GAME_MARKETS):
+        hits = [g["picks"][idx][3] for g in games]
+        probs = [g["picks"][idx][2] for g in games]
+        rows += (f"<tr><td>{label}</td><td>{sum(hits)} / {len(hits)}</td><td><b>{np.mean(hits):.0%}</b></td>"
+                 f"<td>{np.mean(probs):.0%}</td></tr>")
+    score_hits = sum(g["score_hit"] for g in games)
+    rows += (f"<tr><td>Exact score</td><td>{score_hits} / {len(games)}</td>"
+             f"<td><b>{score_hits / len(games):.0%}</b></td>"
+             f"<td>{np.mean([g['score_pick'][2] for g in games]):.0%}</td></tr>")
+    return ('<div class="scroll"><table><tr><th>Market</th><th>Picks correct</th><th>Hit rate</th>'
+            '<th>Model expected</th></tr>' + rows + '</table></div>'
+            '<p class="mute" style="margin-top:4px">"Model expected" is the average probability the model gave '
+            'its own picks. A hit rate close to it means the probabilities are honest; consistently below it '
+            'means the model is over-confident.</p>')
+
+
+def games_table_html(games: list[dict], limit: int | None = None) -> str:
+    """Prediction vs result for each settled game, with a league filter."""
+    from .report import filter_chips
+    rows = ""
+    for i, g in enumerate(games, 1):
+        cells = "".join(
+            f'<td class="{"hit" if ok else "miss"}">{"✓" if ok else "✗"} {html.escape(pick)} '
+            f'<span class="mute">{p:.0%}</span></td>' for _, pick, p, ok in g["picks"])
+        sh, sa, sp = g["score_pick"]
+        vb = ", ".join(f'<span class="{"hit" if w else "miss"}">{"✓" if w else "✗"} '
+                       f'{html.escape(_sel_label(sel))} @{o:.2f}</span>' for sel, o, w in g["value_bets"]) or "–"
+        hidden = " hidden" if limit and i > limit else ""
+        rows += (f'<tr data-league="{_slug(g["league"])}"{hidden}>'
+                 f'<td class="nw">{g["kickoff"]:%d %b %Y}</td>'
+                 f'<td class="l">{html.escape(g["league"])}</td>'
+                 f'<td class="l">{html.escape(g["home"])} v {html.escape(g["away"])}</td>'
+                 f'<td><b>{g["hg"]}-{g["ag"]}</b></td>{cells}'
+                 f'<td class="{"hit" if g["score_hit"] else "mute"}">{sh}-{sa} <span class="mute">{sp:.0%}</span></td>'
+                 f'<td>{vb}</td></tr>')
+    return ('<div class="filter-wrap" data-key="results">'
+            + filter_chips(g["league"] for g in games)
+            + f'<div class="scroll"><table class="filterable" data-limit="{limit or 0}"><thead><tr>'
+            '<th>Date</th><th class="l">League</th><th class="l">Match</th><th>Result</th><th>1X2</th><th>BTTS</th><th>GG2+</th>'
+            '<th>O/U 2.5</th><th>Likeliest score</th><th>Value bets</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table></div>'
+            '<p class="mute filter-empty" hidden>No settled games in the selected leagues.</p></div>')
+
+
+def _slug(text: str) -> str:
+    from .report import slug
+    return slug(text)
+
+
+def games_section_html(ev: dict, limit: int = 25) -> str:
+    """Card for the track-record page: summary + the latest ``limit`` games + link to all."""
+    games = settled_games(ev)
+    if not games:
+        return ""
+    return (f'<div class="card"><div class="head"><h2>Settled predictions</h2>'
+            f'<a href="{RESULTS_FILE}">View all {len(games)} settled games →</a></div>'
+            f'<div class="mute" style="margin:4px 0 8px">What the tool predicted before kick-off next to the '
+            f'final score. The latest {min(limit, len(games))} are shown below, newest first; ✓ = pick was right.</div>'
+            f'{games_summary_html(games)}<h3 style="margin:16px 0 4px;font-size:14px">Latest games</h3>'
+            f'{games_table_html(games, limit)}</div>')
+
+
+def games_page_body(ev: dict) -> str:
+    games = settled_games(ev)
+    return (f'<div class="card"><h2>{len(games)} settled games</h2>{games_summary_html(games)}</div>'
+            f'<div class="card">{games_table_html(games)}</div>')

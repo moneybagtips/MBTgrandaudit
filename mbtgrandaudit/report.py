@@ -139,6 +139,8 @@ font:inherit;font-size:12.5px;cursor:pointer}
 .chip[aria-pressed="true"]{border-color:var(--bar);background:var(--acc-soft)}
 .chip[aria-pressed="false"]{opacity:.5;text-decoration:line-through}
 .chip-all{font-weight:600}tr[hidden]{display:none}
+.hit{color:var(--acc)}.miss{color:var(--bar3)}td.hit,td.miss{white-space:nowrap}
+th.l,td.l{text-align:left}.nw{white-space:nowrap}
 .pick.value{background:var(--acc);color:var(--card)}
 .pick.low{background:transparent;color:var(--mute);border:1px solid var(--line)}
 table{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
@@ -256,47 +258,57 @@ def _match_card(p) -> str:
 
 DRAWS_FILE = "draws.html"
 
-# League filter for the draws tables. Rows carry data-league; excluded leagues are kept in
-# localStorage so the choice is shared by the main page and the full list. Each table
-# shows the first `data-limit` rows that survive the filter, renumbered.
-DRAWS_JS = """(function(){
-var KEY='mbt-draws-excluded', off;
-try{off=new Set(JSON.parse(localStorage.getItem(KEY)||'[]'));}catch(e){off=new Set();}
-function apply(){
-  document.querySelectorAll('table.draws').forEach(function(t){
-    var lim=parseInt(t.dataset.limit||'0',10)||Infinity, n=0;
+# League filter for tables. Each .filter-wrap holds chips (data-league) and a
+# table.filterable whose rows carry data-league; excluded leagues are kept in localStorage
+# per data-key, so e.g. the main page and draws.html share one choice. A table shows the
+# first data-limit rows that survive the filter (0 = all), renumbered in td.rk if present.
+FILTER_JS = """(function(){
+document.querySelectorAll('.filter-wrap').forEach(function(w){
+  var KEY='mbt-filter-'+w.dataset.key, off;
+  try{off=new Set(JSON.parse(localStorage.getItem(KEY)||'[]'));}catch(e){off=new Set();}
+  function apply(){
+    var t=w.querySelector('table.filterable'), lim=parseInt(t.dataset.limit||'0',10)||Infinity, n=0;
     t.querySelectorAll('tbody tr').forEach(function(r){
       var show=!off.has(r.dataset.league)&&n<lim;
-      if(show){n++;r.querySelector('.rk').textContent=n;}
+      if(show){n++;var rk=r.querySelector('.rk');if(rk){rk.textContent=n;}}
       r.hidden=!show;
     });
-    var empty=t.closest('.draws-wrap').querySelector('.draws-empty');
-    if(empty){empty.hidden=n>0;}
+    var empty=w.querySelector('.filter-empty'); if(empty){empty.hidden=n>0;}
+    w.querySelectorAll('.chip[data-league]').forEach(function(c){
+      c.setAttribute('aria-pressed',String(!off.has(c.dataset.league)));
+    });
+    try{localStorage.setItem(KEY,JSON.stringify(Array.from(off)));}catch(e){}
+  }
+  w.querySelectorAll('.chip[data-league]').forEach(function(c){
+    c.addEventListener('click',function(){
+      var l=c.dataset.league; if(off.has(l)){off.delete(l);}else{off.add(l);} apply();
+    });
   });
-  document.querySelectorAll('.chip[data-league]').forEach(function(c){
-    c.setAttribute('aria-pressed',String(!off.has(c.dataset.league)));
+  w.querySelectorAll('.chip-all').forEach(function(c){
+    c.addEventListener('click',function(){off.clear();apply();});
   });
-  try{localStorage.setItem(KEY,JSON.stringify(Array.from(off)));}catch(e){}
-}
-document.querySelectorAll('.chip[data-league]').forEach(function(c){
-  c.addEventListener('click',function(){
-    var l=c.dataset.league; if(off.has(l)){off.delete(l);}else{off.add(l);} apply();
-  });
+  apply();
 });
-document.querySelectorAll('.chip-all').forEach(function(c){
-  c.addEventListener('click',function(){off.clear();apply();});
-});
-apply();
 })();"""
+
+
+def with_filter_js(html_page: str) -> str:
+    return html_page.replace("</body>", f"<script>{FILTER_JS}</script></body>")
+
+
+def filter_chips(leagues) -> str:
+    """'Show all' plus one toggle per league, with its row count."""
+    counts: dict[str, int] = {}
+    for lg in leagues:
+        counts[lg] = counts.get(lg, 0) + 1
+    chips = "".join(f'<button type="button" class="chip" data-league="{slug(lg)}" aria-pressed="true">'
+                    f'{html.escape(lg)} <span class="mute">{n}</span></button>' for lg, n in sorted(counts.items()))
+    return (f'<div class="chips" role="group" aria-label="Filter by league">'
+            f'<button type="button" class="chip chip-all">Show all</button>{chips}</div>')
 
 
 def _draws_table(ranked, link, limit: int | None = None) -> str:
     """Draw-probability table with a league filter. ``limit`` rows are shown after filtering."""
-    counts: dict[str, int] = {}
-    for lg, _ in ranked:
-        counts[lg] = counts.get(lg, 0) + 1
-    chips = "".join(f'<button type="button" class="chip" data-league="{slug(lg)}" aria-pressed="true">'
-                    f'{html.escape(lg)} <span class="mute">{n}</span></button>' for lg, n in sorted(counts.items()))
     rows = ""
     for i, (lg, p) in enumerate(ranked, 1):
         e, fx = p.ensemble, p.fixture
@@ -311,17 +323,16 @@ def _draws_table(ranked, link, limit: int | None = None) -> str:
             f"<td>{pct(e['under_2.5'])}</td><td>{pct(mk) if mk else '–'}</td><td>{1 / e['draw']:.2f}</td></tr>")
     scope = f"top {limit} of the leagues selected below" if limit else "every fixture, filtered by league"
     return (
-        '<div class="draws-wrap">'
+        '<div class="filter-wrap" data-key="draws">'
         f'<div class="mute" style="margin:4px 0 8px">Fixtures ranked by ensemble draw probability ({scope}). '
         'Draws rarely top 31%; a high value means an evenly matched, low-scoring game, '
         'not that a draw is expected.</div>'
-        f'<div class="chips" role="group" aria-label="Filter by league">'
-        f'<button type="button" class="chip chip-all">Show all</button>{chips}</div>'
-        f'<div class="scroll"><table class="draws" data-limit="{limit or 0}"><thead>'
+        f'{filter_chips(lg for lg, _ in ranked)}'
+        f'<div class="scroll"><table class="filterable" data-limit="{limit or 0}"><thead>'
         '<tr><th>#</th><th>Kick-off</th><th>League</th><th>Match</th><th>Draw</th><th>1 / 2</th>'
         '<th>Exp. goals</th><th>Likeliest score</th><th>U2.5</th><th>Market draw</th><th>Fair</th></tr>'
         f'</thead><tbody>{rows}</tbody></table></div>'
-        '<p class="mute draws-empty" hidden>No fixtures in the selected leagues.</p></div>')
+        '<p class="mute filter-empty" hidden>No fixtures in the selected leagues.</p></div>')
 
 
 def html_report(preds_by_league: dict, path: Path, generated: datetime,
@@ -381,7 +392,7 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
     draws_page = page("Likeliest draws", f'<div class="card">{_draws_table(ranked, link)}</div>',
                       generated, nav)
     out = path.with_name(DRAWS_FILE)
-    out.write_text(draws_page.replace("</body>", f"<script>{DRAWS_JS}</script></body>"), encoding="utf-8")
+    out.write_text(with_filter_js(draws_page), encoding="utf-8")
     written.append(out)
 
     tiles = ""
@@ -417,6 +428,6 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
             f'{leagues_card}<div class="card"><h2>Strongest calls by market</h2><div class="grid">'
             f'{"".join(boards)}</div></div>{draws_card}{tr_card}')
     main = page("MBTgrandaudit predictions", body, generated, f'<a href="{DRAWS_FILE}">All draws</a> · {tr_link}')
-    path.write_text(main.replace("</body>", f"<script>{DRAWS_JS}</script></body>"), encoding="utf-8")
+    path.write_text(with_filter_js(main), encoding="utf-8")
     written.insert(0, path)
     return written
