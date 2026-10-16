@@ -133,3 +133,28 @@ def test_postgres_store_matches_sqlite(tmp_path):
         pg.execute("DROP SCHEMA IF EXISTS mbt_pytest CASCADE")
         pg.close()
         lite.close()
+
+
+def test_odds_issue_import(tmp_path):
+    from datetime import datetime, timezone
+    from mbtgrandaudit.cli import _apply_issue, _parse_issue
+    from mbtgrandaudit.storage import Store
+    m = poisson_matrix(1.5, 1.2)
+    st = Store(tmp_path / "t.db")
+    for ev, ko in (("101", "2099-01-01 15:00"), ("102", "2000-01-01 15:00")):   # future / past kick-off
+        st.add_prediction(event_id=ev, league="EPL", home="Home", away="Away", model_home="Home",
+                          model_away="Away", kickoff=pd.Timestamp(ko), predicted_at=pd.Timestamp("2000-01-01"),
+                          version="v1", source="live", matrix=m, markets=markets(m), weights={},
+                          features={}, model_matrices={})
+    body = ("Odds entered on the MBTgrandaudit odds form.\nBookmaker: Book\n\n"
+            "> Format: event id | market | decimal odds | match\n\n"
+            "101 | gg2_yes | 6.50 | Home v Away\n101 | ng2 | 1,10 | Home v Away\n"
+            "102 | gg2_yes | 7.00 | Home v Away\n999 | gg2_yes | 7.00 | X v Y\n101 | o3 | 2.0 | Home v Away\n")
+    bookmaker, lines = _parse_issue(body)
+    assert bookmaker == "Book" and len(lines) == 5
+    md, saved = _apply_issue(st, body, datetime.now(timezone.utc))
+    assert saved == 2                                   # 101 gg2_yes + gg2_no (comma decimal)
+    assert "already kicked off" in md and "unknown fixture" in md and "half-goal" in md
+    mo = st.market_odds_for(["101"])
+    assert sorted(mo["market"]) == ["gg2_no", "gg2_yes"] and set(mo["bookmaker"]) == {"Book"}
+    st.close()

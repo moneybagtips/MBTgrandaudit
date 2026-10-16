@@ -110,14 +110,8 @@ The tool fills the gap three ways:
    proportional scaling put long shots (odds of 5+) at 13.8% and the power method at
    12.7%; they actually won 12.1%.
 2. **Entering odds by hand** for logged fixtures. Prices are stored in the log; the next
-   `predict` shows the edge, and `evaluate` counts the bets.
-   ```bash
-   python -m mbtgrandaudit odds add Arsenal Leeds gg2 7.50 --bookmaker Bet365
-   python -m mbtgrandaudit odds import my_prices.csv   # columns: home, away, market, odds[, bookmaker]
-   python -m mbtgrandaudit odds list
-   ```
-   Market codes: `1 X 2`, `gg`/`ng` (BTTS yes/no), `gg2`/`ng2` (GG2+ yes/no),
-   `o2.5`/`u3.5` (half-goal lines only).
+   `predict` shows the edge, and `evaluate` counts the bets. See
+   [Entering odds](#entering-odds-gg2-btts-and-other-markets) below for the three ways to do it.
 3. **Per-market thresholds** in `config.py`. A price counts as VALUE only if the model's edge
    clears the threshold for that market (`min_edge`: 1X2 3%, O/U 3%, BTTS 5%, GG2+ 10%)
    **and** the statistical models (without the market view) are within 10 points of the
@@ -129,6 +123,76 @@ Backfill findings (3,504 games):
 * GG2+, models only vs the market view from prediction-time odds: level (no
   significant difference).
 * Against the closing-odds market view, the market is better on every market.
+
+## Entering odds (GG2+, BTTS and other markets)
+
+ESPN supplies 1X2 and one Over/Under line. For anything else, e.g. GG2+ from your
+bookmaker, enter the prices yourself in one of three ways. Prices only count for
+fixtures the daily run has logged, and only if entered before kick-off.
+
+### 1. The odds form on the Pages site (no terminal; works on a phone)
+
+1. Open **Enter odds** (`odds.html`), linked in the header of every page and under the
+   Leagues section. It lists upcoming fixtures by league, with boxes for GG2+ Yes/No and
+   BTTS Yes/No.
+2. Type decimal odds into any boxes. Each box shows the model's probability and fair odds,
+   and as you type it shows the edge, green with **VALUE** if the price clears that market's
+   threshold. You can also fill in the bookmaker name (optional).
+3. Press **Open GitHub issue**. A pre-filled issue titled `Odds: …` opens in a new tab, with
+   one line per price (`event id | market | odds | match`). Press **Create**. You must be
+   signed in to GitHub as the repository owner.
+4. The **Odds entry** workflow (`.github/workflows/odds-entry.yml`) then:
+   * saves the prices to the database,
+   * replies on the issue with each price's model probability, fair odds, edge and verdict,
+     and lists any lines it skipped (unknown fixture, already kicked off, bad odds),
+   * closes the issue,
+   * re-runs **Predict**, so the pages show the new edges a few minutes later.
+
+Things to know:
+* **Only issues opened by the repository owner are processed.** The repo is public, so
+  anyone can open an issue; the workflow ignores everyone else's.
+* **The prices you enter are public**, in the issue and its reply.
+* **Each submission uses about a minute of Actions time.** That's free on a public repository.
+* **If the page doesn't know its GitHub repository** (e.g. a copy opened from disk without a
+  git remote), use **Show as CSV** and option 3 instead.
+
+### 2. One price at a time (terminal)
+
+```bash
+python -m mbtgrandaudit odds add Arsenal Leeds gg2 7.50 --bookmaker Bet365
+```
+
+Team names only need to contain part of the real name. If a name matches more than one
+upcoming fixture, the command lists them so you can be more specific.
+
+### 3. Many prices from a CSV file (terminal)
+
+```bash
+python -m mbtgrandaudit odds import my_prices.csv
+```
+
+`my_prices.csv` needs the columns `home, away, market, odds`, and optionally `bookmaker`.
+There is one line per price; the form's **Show as CSV** button produces exactly this
+format:
+
+```
+home,away,market,odds,bookmaker
+Everton,Chelsea,gg2,6.50,Bet365
+Brentford,Liverpool,ng2,1.12,Bet365
+```
+
+Check what's stored with `python -m mbtgrandaudit odds list`.
+
+**Market codes:**
+* `1`, `X`, `2`: match result
+* `gg` / `ng`: BTTS yes / no
+* `gg2` / `ng2`: GG2+ yes / no
+* `o2.5` / `u3.5` etc.: over / under, half-goal lines only
+
+The full key names (`gg2_yes`, `btts_no`, `over_2.5` …) work too.
+
+Commands 2 and 3 write to whichever database is configured. With `DATABASE_URL` in your
+`.env`, that's Supabase.
 
 ## Reading the output
 

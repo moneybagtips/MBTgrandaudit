@@ -1,0 +1,55 @@
+name: Odds entry
+
+# Imports prices submitted through the odds form (odds.html on the Pages site). The form
+# opens a pre-filled issue titled "Odds: ..."; this saves the prices, replies with each
+# edge, closes the issue and refreshes the prediction pages.
+#
+# Only issues opened by the repository owner are processed: in a public repository anyone
+# can open an issue, and everyone else's are ignored.
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+concurrency:
+  group: odds-entry
+  cancel-in-progress: false
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  import:
+    if: >-
+      startsWith(github.event.issue.title, 'Odds:') &&
+      github.event.issue.author_association == 'OWNER'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+
+      # the issue body goes through an environment variable, never into the script text
+      - name: Save prices
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          printf '%s\n' "$ISSUE_BODY" > issue_body.txt
+          python -m mbtgrandaudit odds from-issue issue_body.txt --report reply.md
+
+      - name: Reply, close and refresh the pages
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          if [ ! -s reply.md ]; then
+            echo "Importing the prices failed; see the workflow log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > reply.md
+          fi
+          gh issue comment "$NUMBER" --body-file reply.md
+          gh issue close "$NUMBER" --reason completed
+          gh workflow run predict.yml
