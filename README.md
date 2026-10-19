@@ -157,6 +157,8 @@ fixtures the daily run has logged, and only if entered before kick-off.
    * re-runs **Predict**, so the pages show the new edges a few minutes later.
 
 Things to know:
+* **The issue title must contain `Odds:`** (you can add text around it, e.g. `EPL Odds: …`).
+  To import an issue again, or one the workflow skipped, close and reopen it.
 * **Only issues opened by the repository owner are processed.** The repo is public, so
   anyone can open an issue; the workflow ignores everyone else's.
 * **The prices you enter are public**, in the issue and its reply.
