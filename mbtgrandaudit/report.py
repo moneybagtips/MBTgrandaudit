@@ -413,24 +413,81 @@ def _odds_form_body(preds_by_league: dict, link, repo: str | None, min_edge: dic
             'style="width:100%;margin-top:6px;font:12px monospace"></textarea></details></div>')
 
 
-def _picks_table(items, link) -> str:
-    """Every fixture's pick in one market, ranked by probability, with a league filter."""
+PREDICTIONS_FILE = "predictions.html"
+MORE_SHARE = 0.20   # "View more" pages: the top 20% of fixtures...
+
+
+def more_count(total: int, card: int) -> int:
+    """...but always at least 10 more rows than the main-page card, and never more than exist."""
+    return int(min(total, max(card + 10, -(-total * MORE_SHARE // 1))))
+
+
+def _model_pick(p, market: str) -> tuple[str, float]:
+    """The ensemble's own call in a market: ('1'|'X'|'2', 'Yes'|'No' or 'Over 2.5'|'Under 2.5', prob)."""
+    e = p.ensemble
+    if market == "1x2":
+        key = max(("home", "draw", "away"), key=lambda k: e[k])
+        return {"home": "1", "draw": "X", "away": "2"}[key], e[key]
+    if market in ("btts", "gg2"):
+        yes = e[f"{market}_yes"] >= 0.5
+        return ("Yes", e[f"{market}_yes"]) if yes else ("No", e[f"{market}_no"])
+    over = e["over_2.5"] >= 0.5
+    return ("Over 2.5", e["over_2.5"]) if over else ("Under 2.5", e["under_2.5"])
+
+
+def _picks_table(items, link, model_pick: str | None = None) -> str:
+    """Fixtures ranked by the probability of one selection, with a league filter.
+    ``model_pick`` adds a column with the model's own call in that market (e.g. 'gg2'), so a
+    ranked 'Yes' at 26% visibly reads as the model expecting 'No'."""
     rows = ""
     for i, (q, pick, key, lg, p) in enumerate(items, 1):
         mp = p.market.get("implied_model", {}).get(key)
         price = p.market.get("prices", {}).get(key)
         edge = p.market.get("edge", {}).get(key)
+        own = ""
+        if model_pick:
+            call, cp = _model_pick(p, model_pick)
+            own = f'<td class="nw"><b>{call}</b> <span class="mute">{pct(cp)}</span></td>'
         rows += (f'<tr data-league="{slug(lg)}"><td class="rk">{i}</td><td class="nw">{_local(p.fixture.kickoff)}</td>'
                  f'<td class="l">{html.escape(lg)}</td><td class="l">{link(lg, p.fixture)}</td><td>{pick}</td>'
-                 f'<td><b>{pct(q)}</b></td><td>{1 / q:.2f}</td><td>{pct(mp) if mp is not None else "–"}</td>'
+                 f'<td><b>{pct(q)}</b></td>{own}<td>{1 / q:.2f}</td><td>{pct(mp) if mp is not None else "–"}</td>'
                  f'<td>{f"{price[0]:.2f}" if price else "–"}</td>'
                  f'<td>{f"{edge:+.0%}" if edge is not None else "–"}</td></tr>')
+    own_head = "<th>Model's pick</th>" if model_pick else ""
     return ('<div class="filter-wrap" data-key="picks">' + filter_chips(lg for *_, lg, _ in items)
             + '<div class="scroll"><table class="filterable"><thead><tr><th>#</th><th>Kick-off</th>'
-            '<th class="l">League</th><th class="l">Match</th><th>Pick</th><th>Prob.</th><th>Fair</th>'
-            '<th>Market</th><th>Price</th><th>Edge</th></tr></thead>'
+            '<th class="l">League</th><th class="l">Match</th><th>Selection</th><th>Prob.</th>'
+            f'{own_head}<th>Fair</th><th>Market</th><th>Price</th><th>Edge</th></tr></thead>'
             f'<tbody>{rows}</tbody></table></div>'
             '<p class="mute filter-empty" hidden>No fixtures in the selected leagues.</p></div>')
+
+
+def _all_predictions_body(allp, link) -> str:
+    """Every upcoming fixture with the model's call in each market, laid out like the
+    settled-games table on the track record (without the result)."""
+    rows = ""
+    for lg, p in sorted(allp, key=lambda t: t[1].fixture.kickoff):
+        cells = ""
+        for market in ("1x2", "btts", "gg2", "ou"):
+            call, cp = _model_pick(p, market)
+            cells += f'<td class="nw"><b>{call.replace(" 2.5", "")}</b> <span class="mute">{pct(cp)}</span></td>'
+        h, a_, q = p.ensemble["top_scores"][0]
+        vals = ", ".join(f'{html.escape(k["market"].replace(" (value)", ""))} {html.escape(k["pick"])} '
+                         f'@{k["price"]:.2f} <span class="hit">{k["edge"]:+.0%}</span>'
+                         for k in p.picks if k.get("value")) or "–"
+        rows += (f'<tr data-league="{slug(lg)}"><td class="nw">{_local(p.fixture.kickoff)}</td>'
+                 f'<td class="l">{html.escape(lg)}</td><td class="l">{link(lg, p.fixture)}</td>{cells}'
+                 f'<td class="nw">{h}-{a_} <span class="mute">{pct(q)}</span></td><td>{vals}</td></tr>')
+    return ('<div class="card"><div class="mute" style="margin-bottom:8px">The model\'s call in each market '
+            'for every upcoming fixture, in kick-off order: the outcome it rates most likely, with its '
+            'probability. Same layout as the settled games on the track record, which add the result. '
+            'Click a match for the full analysis.</div>'
+            '<div class="filter-wrap" data-key="predictions">' + filter_chips(lg for lg, _ in allp)
+            + '<div class="scroll"><table class="filterable"><thead><tr><th>Kick-off</th><th class="l">League</th>'
+            '<th class="l">Match</th><th>1X2</th><th>BTTS</th><th>GG2+</th><th>O/U 2.5</th>'
+            '<th>Likeliest score</th><th>Value picks</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table></div>'
+            '<p class="mute filter-empty" hidden>No fixtures in the selected leagues.</p></div></div>')
 
 
 def _values_body(values, link) -> str:
@@ -460,29 +517,34 @@ def _values_body(values, link) -> str:
             '<p class="mute filter-empty" hidden>No value picks in the selected leagues.</p></div></div>')
 
 
-def _draws_table(ranked, link, limit: int | None = None) -> str:
-    """Draw-probability table with a league filter. ``limit`` rows are shown after filtering."""
+def _draws_table(ranked, link, limit: int | None = None, total: int | None = None) -> str:
+    """Draw-probability table with a league filter. ``limit`` rows are shown after filtering;
+    ``total`` (on the "view more" page) is how many fixtures the shown top share came from."""
     rows = ""
     for i, (lg, p) in enumerate(ranked, 1):
         e, fx = p.ensemble, p.fixture
         h, a_, q = e["top_scores"][0]
         mk = p.market.get("implied", {}).get("draw")
+        call, cp = _model_pick(p, "1x2")
         hidden = " hidden" if limit and i > limit else ""   # without JavaScript: plain top N
         rows += (
             f'<tr data-league="{slug(lg)}"{hidden}><td class="rk">{i}</td><td>{_local(fx.kickoff)}</td>'
             f"<td>{html.escape(lg)}</td><td>{link(lg, fx)}</td><td><b>{pct(e['draw'])}</b></td>"
+            f'<td class="nw"><b>{call}</b> <span class="mute">{pct(cp)}</span></td>'
             f"<td>{e['home'] * 100:.0f} / {e['away'] * 100:.0f}</td>"
             f"<td>{e['xg_home']:.2f}–{e['xg_away']:.2f}</td><td>{h}-{a_} ({pct(q)})</td>"
             f"<td>{pct(e['under_2.5'])}</td><td>{pct(mk) if mk else '–'}</td><td>{1 / e['draw']:.2f}</td></tr>")
-    scope = f"top {limit} of the leagues selected below" if limit else "every fixture, filtered by league"
+    scope = (f"top {limit} of the leagues selected below" if limit else
+             f"the top 20%: {len(ranked)} of {total} fixtures" if total else "every fixture")
     return (
         '<div class="filter-wrap" data-key="draws">'
         f'<div class="mute" style="margin:4px 0 8px">Fixtures ranked by ensemble draw probability ({scope}). '
         'Draws rarely top 31%; a high value means an evenly matched, low-scoring game, '
-        'not that a draw is expected.</div>'
+        'not that a draw is expected. "Model\'s pick" is the outcome the model actually rates most likely.</div>'
         f'{filter_chips(lg for lg, _ in ranked)}'
         f'<div class="scroll"><table class="filterable" data-limit="{limit or 0}"><thead>'
-        '<tr><th>#</th><th>Kick-off</th><th>League</th><th>Match</th><th>Draw</th><th>1 / 2</th>'
+        '<tr><th>#</th><th>Kick-off</th><th>League</th><th>Match</th><th>Draw</th><th>Model\'s pick</th>'
+        '<th>1 / 2</th>'
         '<th>Exp. goals</th><th>Likeliest score</th><th>U2.5</th><th>Market draw</th><th>Fair</th></tr>'
         f'</thead><tbody>{rows}</tbody></table></div>'
         '<p class="mute filter-empty" hidden>No fixtures in the selected leagues.</p></div>')
@@ -500,8 +562,8 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
     main_name = path.name
     tr_link = (f'<a href="{html.escape(track_record)}">Track record</a>' if track_record
                else '<span class="mute">Track record (none yet)</span>')
-    nav = (f'<a href="{html.escape(main_name)}">← All leagues</a> · <a href="{DRAWS_FILE}">All draws</a>'
-           f' · <a href="{ODDS_FILE}">Enter odds</a> · {tr_link}')
+    nav = (f'<a href="{html.escape(main_name)}">← All leagues</a> · <a href="{PREDICTIONS_FILE}">All predictions</a>'
+           f' · <a href="{DRAWS_FILE}">Draws</a> · <a href="{ODDS_FILE}">Enter odds</a> · {tr_link}')
     written = []
 
     def link(lg, fx):
@@ -521,7 +583,7 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
     # ---- main page: cross-league summaries + links
     allp = [(lg, p) for lg, preds in preds_by_league.items() for p in preds]
 
-    # ---- strongest calls: top 10 per market on the main page, every fixture on its own page
+    # ---- strongest calls: top 10 per market on the main page, top 20% on its own page
     pick_of = lambda p, mkt: next(k for k in p.picks if k["market"] == mkt)
 
     def from_pick(label):
@@ -538,17 +600,25 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
         items = sorted(((*get(p), lg, p) for lg, p in allp), key=lambda t: -t[0])
         rows = "".join(f"<tr><td>{link(lg, p.fixture)}</td><td>{pick}</td><td>{pct(q)}</td><td>{1 / q:.2f}</td></tr>"
                        for q, pick, _, lg, p in items[:10])
+        k = more_count(len(items), 10)
         boards.append(f'<div class="box"><h3>{title}</h3><table><tr><th>Match</th><th>Pick</th><th>Prob.</th>'
                       f'<th>Fair</th></tr>{rows}</table>'
-                      f'<div style="margin-top:6px;text-align:right"><a href="{fname}">View all {len(items)} →</a>'
+                      f'<div style="margin-top:6px;text-align:right"><a href="{fname}">View more →</a>'
                       f'</div></div>')
         out = path.with_name(fname)
-        body = (f'<div class="card"><div class="mute" style="margin-bottom:8px">Every fixture\'s '
-                f'{"GG2+ Yes probability" if fname == "picks-gg2.html" else "most likely outcome in this market"}, '
-                f'ranked by the model\'s probability. "Market" is the bookmakers\' view of the same pick '
-                f'(implied from their 1X2 + O/U odds); price and edge appear where odds exist.</div>'
-                + _picks_table(items, link) + "</div>")
-        out.write_text(with_filter_js(page(f"Strongest calls: {title}", body, generated, nav)), encoding="utf-8")
+        gg2 = fname == "picks-gg2.html"
+        intro = (f"The {k} fixtures (top 20% of {len(items)}) where GG2+ Yes is most likely. Even here the "
+                 "probability usually stays below 50%, so the model's own pick, in the \"Model's pick\" column, "
+                 "is mostly <b>No</b>: read this as where both teams scoring twice is most plausible, not as "
+                 "predictions that it will happen." if gg2 else
+                 f"The {k} fixtures (top 20% of {len(items)}) where the model is most confident in this market.")
+        body = (f'<div class="card"><div class="mute" style="margin-bottom:8px">{intro} "Market" is the '
+                f'bookmakers\' view of the same selection (implied from their 1X2 + O/U odds); price and edge '
+                f'appear where odds exist. For every fixture\'s call in every market, see '
+                f'<a href="{PREDICTIONS_FILE}">all predictions</a>.</div>'
+                + _picks_table(items[:k], link, "gg2" if gg2 else None) + "</div>")
+        out.write_text(with_filter_js(page(f"Strongest calls: {title} (top 20%)", body, generated, nav)),
+                       encoding="utf-8")
         written.append(out)
 
     # ---- value picks across all leagues
@@ -556,6 +626,12 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
                     key=lambda t: (t[1].fixture.kickoff, -(t[2]["edge"] or 0)))
     out = path.with_name(VALUES_FILE)
     out.write_text(with_filter_js(page("Value picks", _values_body(values, link), generated, nav)),
+                   encoding="utf-8")
+    written.append(out)
+
+    # ---- every fixture, every market
+    out = path.with_name(PREDICTIONS_FILE)
+    out.write_text(with_filter_js(page("All predictions", _all_predictions_body(allp, link), generated, nav)),
                    encoding="utf-8")
     written.append(out)
 
@@ -569,10 +645,13 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
     ranked = sorted(allp, key=lambda t: -t[1].ensemble["draw"])
     draws_card = (
         f'<div class="card"><div class="head"><h2>Likeliest draws</h2>'
-        f'<a href="{DRAWS_FILE}">View all {len(ranked)} draws →</a></div>'
+        f'<a href="{DRAWS_FILE}">View more →</a></div>'
         + _draws_table(ranked, link, limit=20) + "</div>")
-    draws_page = page("Likeliest draws", f'<div class="card">{_draws_table(ranked, link)}</div>',
-                      generated, nav)
+    k = more_count(len(ranked), 20)
+    draws_page = page("Likeliest draws (top 20%)",
+                      f'<div class="card">{_draws_table(ranked[:k], link, total=len(ranked))}'
+                      f'<p class="mute" style="margin-top:8px">For every fixture\'s call in every market, see '
+                      f'<a href="{PREDICTIONS_FILE}">all predictions</a>.</p></div>', generated, nav)
     out = path.with_name(DRAWS_FILE)
     out.write_text(with_filter_js(draws_page), encoding="utf-8")
     written.append(out)
@@ -599,7 +678,10 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
                     f'<div class="row" style="margin-top:12px"><span class="mute">{len(values)} VALUE '
                     f'pick{"s" if len(values) != 1 else ""} across all leagues</span>'
                     f'<span><a href="{ODDS_FILE}">Enter odds</a> · '
-                    f'<a href="{VALUES_FILE}">View all value picks →</a></span></div></div>')
+                    f'<a href="{VALUES_FILE}">View all value picks →</a></span></div>'
+                    f'<div class="row" style="margin-top:6px"><span class="mute">{len(allp)} fixtures: every '
+                    f'market, one table</span><a href="{PREDICTIONS_FILE}"><b>View all predictions →</b></a>'
+                    f'</div></div>')
     if track_record:
         tr_card = (f'<div class="card"><div class="head"><h2>Track record</h2>'
                    f'<a href="{html.escape(track_record)}">Open track record →</a></div>'
@@ -614,7 +696,8 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
             f'{leagues_card}<div class="card"><h2>Strongest calls by market</h2><div class="grid">'
             f'{"".join(boards)}</div></div>{draws_card}{tr_card}')
     main = page("MBTgrandaudit predictions", body, generated,
-                f'<a href="{DRAWS_FILE}">All draws</a> · <a href="{ODDS_FILE}">Enter odds</a> · {tr_link}')
+                f'<a href="{PREDICTIONS_FILE}">All predictions</a> · <a href="{DRAWS_FILE}">Draws</a> · '
+                f'<a href="{ODDS_FILE}">Enter odds</a> · {tr_link}')
     path.write_text(with_filter_js(main), encoding="utf-8")
     written.insert(0, path)
     return written
