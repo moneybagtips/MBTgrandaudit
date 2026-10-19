@@ -158,3 +158,16 @@ def test_odds_issue_import(tmp_path):
     mo = st.market_odds_for(["101"])
     assert sorted(mo["market"]) == ["gg2_no", "gg2_yes"] and set(mo["bookmaker"]) == {"Book"}
     st.close()
+
+
+def test_market_view_uses_entered_prices():
+    from mbtgrandaudit.implied import implied_markets
+    base = {"H": 2.65, "D": 3.55, "A": 2.6, "line": 2.5, "over": 1.69, "under": 2.15}
+    plain = implied_markets(base)
+    high = implied_markets(base, extra={"gg2_yes": 3.2})      # market thinks GG2+ is likelier
+    low = implied_markets(base, extra={"gg2_no": 1.08})       # ... or less likely
+    assert high["gg2_yes"] > plain["gg2_yes"] > low["gg2_yes"]
+    assert "GG2+" in high["info"]["matched"]
+    assert abs(high["home"] - plain["home"]) < 0.02           # 1X2 still matched
+    both = implied_markets(base, extra={"btts_yes": 1.55, "btts_no": 2.35, "over_3.5": 2.6, "under_3.5": 1.45})
+    assert {"BTTS", "O/U 3.5"} <= set(both["info"]["matched"])

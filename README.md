@@ -109,6 +109,14 @@ The tool fills the gap three ways:
    which takes more off long shots than proportional scaling. On the backfill,
    proportional scaling put long shots (odds of 5+) at 13.8% and the power method at
    12.7%; they actually won 12.1%.
+
+   **Entered prices are matched too.** If you enter BTTS, GG2+ or extra O/U prices for a
+   fixture (see [Entering odds](#entering-odds-gg2-btts-and-other-markets)), the market view
+   is fitted to them as well as to 1X2 + O/U. That's the most direct market information on
+   GG2+ available.
+   * A two-sided pair (e.g. GG2+ Yes **and** No) has its margin removed on its own.
+   * A single side has the margin removed with the exponent of the game's 1X2 book.
+   * The reports list what was matched, e.g. "implied from 1X2 + O/U 2.5 + GG2+ odds".
 2. **Entering odds by hand** for logged fixtures. Prices are stored in the log; the next
    `predict` shows the edge, and `evaluate` counts the bets. See
    [Entering odds](#entering-odds-gg2-btts-and-other-markets) below for the three ways to do it.
@@ -194,6 +202,15 @@ The full key names (`gg2_yes`, `btts_no`, `over_2.5` …) work too.
 Commands 2 and 3 write to whichever database is configured. With `DATABASE_URL` in your
 `.env`, that's Supabase.
 
+**Entered prices also move the prediction.** A BTTS, GG2+ or O/U price you enter is
+treated as market information: it feeds the market view, and so the ensemble. As a
+result, the edge shown against that same price is smaller and more cautious than the
+statistical models alone would give.
+
+For example, Tottenham v Coventry: GG2+ was 15.9% before a GG2+ Yes price of 3.20 was
+entered, and 18.6% after. A price far from the models still shows up through the
+**check** flag, which compares the models alone with the market view.
+
 ## Reading the output
 
 * **Fair odds** = 1 / probability. A bet has value only if the bookmaker pays more than this.
@@ -264,6 +281,17 @@ predictions from different versions never get mixed up. Filter on it with
 * calibration (predicted vs. actual by probability bin)
 * betting value: flat-stake ROI on picks with an edge of 3% or more, and **closing line
   value** (CLV, whether you beat the closing price), the earliest reliable sign of real edge
+* **GG2+ by bookmaker O/U line**: GG2+ accuracy split by the main Over/Under line quoted
+  before kick-off. Bookmakers move it to 3.5 for games they expect to be open. For each
+  line it compares a market view fitted to that line, one built from 1X2 odds alone, and
+  the ensemble.
+
+  On the first 87 live O/U 3.5 games, the market view beat the ensemble: log loss 0.536 vs
+  0.543. If that holds over a few hundred games, the ensemble should lean more on the
+  market view when the line is 3.5.
+
+  In a backtest across 17 leagues, league corrections, score spread, team GG2+ rates and
+  shots data didn't improve GG2+ (11,063 games); this odds signal is the one lead.
 
 When you pass `--html`, `predict` adds a track-record card to the report: live results
 once any are settled, the backtest until then.

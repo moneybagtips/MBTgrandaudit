@@ -232,7 +232,7 @@ class LeaguePredictor:
                 mats[m.name] = mat
                 per_model[m.name] = markets(mat, self.s.ou_lines)
         model_only = markets(ensemble(mats, self.weights), self.s.ou_lines)
-        implied = implied_matrix(fx.odds, self.s.max_goals) if fx.odds else None
+        implied = implied_matrix(fx.odds, self.s.max_goals, extra=extra_odds) if fx.odds else None
         if implied is not None:
             mats["market_view"] = implied[0]
             per_model["market_view"] = markets(implied[0], self.s.ou_lines)
@@ -252,7 +252,8 @@ class LeaguePredictor:
 
     def _market(self, odds: dict, ens: dict, extra: dict) -> dict:
         """Bookmaker prices, de-margined probabilities, the market-implied view of every
-        market (solved from 1X2 + O/U), and the model's edge wherever there is a price."""
+        market (solved from 1X2 + O/U, plus any entered BTTS/GG2+/O-U prices), and the
+        model's edge wherever there is a price."""
         if not odds and not extra:
             return {}
         prices = {}   # market key -> (decimal odds, source)
@@ -269,7 +270,7 @@ class LeaguePredictor:
         edges = {k: ens[k] * o - 1 for k, (o, _) in prices.items() if k in ens}
         out = {"odds": odds, "implied": implied_from_odds(odds) if odds else {},
                "prices": prices, "edge": edges, "source": odds.get("source") if odds else "manual"}
-        view = implied_markets(odds, self.s.ou_lines) if odds else None
+        view = implied_markets(odds, self.s.ou_lines, extra) if odds else None
         if view:
             out["implied_info"] = view.pop("info")
             out["implied_model"] = view
