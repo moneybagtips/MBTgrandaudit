@@ -1,14 +1,15 @@
 name: Odds entry
 
 # Imports prices submitted through the odds form (odds.html on the Pages site). The form
-# opens a pre-filled issue titled "Odds: ..."; this saves the prices, replies with each
+# opens a pre-filled issue titled "Odds: ..." (any title containing "Odds:" works; reopen
+# an issue to import it again); this saves the prices, replies with each
 # edge, closes the issue and refreshes the prediction pages.
 #
 # Only issues opened by the repository owner are processed: in a public repository anyone
 # can open an issue, and everyone else's are ignored.
 on:
   issues:
-    types: [opened]
+    types: [opened, reopened]   # reopen an issue to import it again
 
 permissions:
   contents: read
@@ -25,7 +26,7 @@ env:
 jobs:
   import:
     if: >-
-      startsWith(github.event.issue.title, 'Odds:') &&
+      contains(github.event.issue.title, 'Odds:') &&
       github.event.issue.author_association == 'OWNER'
     runs-on: ubuntu-latest
     timeout-minutes: 10
