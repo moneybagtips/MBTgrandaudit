@@ -166,6 +166,46 @@ def market_baseline(store: Store, preds: pd.DataFrame) -> dict:
     return out
 
 
+def gg2_by_line(store: Store, preds: pd.DataFrame, ens: pd.DataFrame) -> pd.DataFrame | None:
+    """GG2+ accuracy split by the O/U line the bookmaker quoted before kick-off.
+
+    Bookmakers move their main line to 3.5 for games they expect to be open. This tracks
+    whether the market view fitted to that line predicts GG2+ better than one built from
+    1X2 odds alone, and than the ensemble: evidence for leaning more on the market there."""
+    odds = store.odds_for(preds["event_id"])
+    if odds.empty:
+        return None
+    pre = odds[odds["kind"] == "prediction"].sort_values("captured_at").groupby("event_id").last()
+    y = outcome("gg2_yes", preds["hg"], preds["ag"])
+    rows = []
+    for i, ev in enumerate(preds["event_id"]):
+        if ev not in pre.index:
+            continue
+        r = pre.loc[ev]
+        if pd.isna(r["home"]) or pd.isna(r["draw"]) or pd.isna(r["away"]):
+            continue
+        base = {"H": float(r["home"]), "D": float(r["draw"]), "A": float(r["away"])}
+        line = None if pd.isna(r["line"]) or pd.isna(r["over_odds"]) or pd.isna(r["under_odds"]) else float(r["line"])
+        full = base | ({"line": line, "over": float(r["over_odds"]), "under": float(r["under_odds"])} if line else {})
+        a, b = implied_markets(full), implied_markets(base)
+        if a and b:
+            rows.append({"line": f"O/U {line:g}" if line else "no O/U line", "y": bool(y[i]),
+                         "market_line": a["gg2_yes"], "market_1x2": b["gg2_yes"], "ensemble": ens["gg2_yes"].iloc[i]})
+    if not rows:
+        return None
+    d = pd.DataFrame(rows)
+
+    def lloss(p, yy):
+        p = np.clip(p.to_numpy(float), 1e-6, 1 - 1e-6)
+        return float(-np.mean(np.where(yy, np.log(p), np.log(1 - p))))
+    out = {}
+    for line, g in d.groupby("line"):
+        out[line] = {"games": len(g), "GG2+ actual": g["y"].mean(), "market view (with line)": lloss(g["market_line"], g["y"]),
+                     "market view (1X2 only)": lloss(g["market_1x2"], g["y"]), "ensemble": lloss(g["ensemble"], g["y"]),
+                     "avg ensemble p": g["ensemble"].mean()}
+    return pd.DataFrame(out).T
+
+
 def calibration(preds: pd.DataFrame, f: pd.DataFrame, bins: int = 10) -> dict:
     """Per market: list of (mean predicted, observed frequency, count) per probability bin."""
     hg, ag = preds["hg"].to_numpy(), preds["ag"].to_numpy()
@@ -278,7 +318,7 @@ def _table(df: pd.DataFrame, fmt: dict | None = None) -> str:
 
 
 def card_html(title: str, table: pd.DataFrame, base: dict, calib: dict, bet_sum: dict,
-              note: str = "", vs_market: pd.DataFrame | None = None) -> str:
+              note: str = "", vs_market: pd.DataFrame | None = None, by_line: pd.DataFrame | None = None) -> str:
     cols = ["matches", "logloss_1x2", "rps_1x2", "acc_1x2", "logloss_btts", "logloss_gg2",
             "logloss_o2.5", "brier_o2.5"]
     t = table[[c for c in cols if c in table.columns]].copy()
@@ -306,9 +346,17 @@ def card_html(title: str, table: pd.DataFrame, base: dict, calib: dict, bet_sum:
               'odds, so markets nobody quotes (GG2+) still get a benchmark. diff &lt; 0: model better; '
               '|z| &gt; 2: unlikely to be luck.</div>'
               + _table(vs_market, {"matches": "{:.0f}", "diff": "{:+.4f}", "z": "{:+.1f}"}))
+    bl = ""
+    if by_line is not None and len(by_line):
+        bl = ('<h3 style="margin:16px 0 4px;font-size:14px">GG2+ by bookmaker O/U line</h3>'
+              '<div class="mute" style="margin-bottom:6px">Log loss for GG2+ (lower is better), split by the main '
+              'Over/Under line quoted before kick-off. Bookmakers move it to 3.5 for games they expect to be open. '
+              'If the market view fitted to that line keeps beating the ensemble on O/U 3.5 games over a few '
+              'hundred games, the ensemble should lean more on the market there.</div>'
+              + _table(by_line, {"games": "{:.0f}", "GG2+ actual": "{:.0%}", "avg ensemble p": "{:.1%}"}))
     return (f'<div class="card"><h2>{html.escape(title)}</h2>'
             f'<div class="mute" style="margin:4px 0 8px">{note}Lower log loss / RPS is better.</div>'
-            f'{_table(t, fmt)}{vm}<h3 style="margin:16px 0 4px;font-size:14px">Calibration (ensemble)</h3>'
+            f'{_table(t, fmt)}{vm}{bl}<h3 style="margin:16px 0 4px;font-size:14px">Calibration (ensemble)</h3>'
             f'<div class="grid">{plots}</div><h3 style="margin:16px 0 4px;font-size:14px">Betting value</h3>{bet}</div>')
 
 
@@ -324,7 +372,8 @@ def evaluate(store: Store, source: str | None, league: str | None = None, versio
     table = scores(preds, probs | ({"market_implied": implied} if has_market else {}))
     return {"preds": preds, "ensemble": ens, "scores": table, "baseline": market_baseline(store, preds),
             "calibration": calibration(preds, ens), "bets": bets, "bet_summary": betting_summary(bets),
-            "vs_market": head_to_head(preds, ens, implied) if has_market else None}
+            "vs_market": head_to_head(preds, ens, implied) if has_market else None,
+            "gg2_by_line": gg2_by_line(store, preds, ens)}
 
 
 def summary_json(ev: dict) -> str:

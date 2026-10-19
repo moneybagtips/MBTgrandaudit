@@ -138,7 +138,7 @@ def _track_record_page(source: str | None = None) -> tuple[str, dict] | None:
             ev = evaluate.evaluate(store, src)
             if ev is not None:
                 card = evaluate.card_html(title, ev["scores"], ev["baseline"], ev["calibration"],
-                                          ev["bet_summary"], note, ev["vs_market"])
+                                          ev["bet_summary"], note, ev["vs_market"], ev["gg2_by_line"])
                 return card, ev
     finally:
         store.close()
@@ -274,6 +274,9 @@ def cmd_evaluate(a):
     if ev["vs_market"] is not None:
         print("\nmodel vs market-implied (diff < 0 = model better, |z| > 2 unlikely to be luck):")
         print(ev["vs_market"].round(4).to_string())
+    if ev["gg2_by_line"] is not None:
+        print("\nGG2+ by bookmaker O/U line (log loss, lower is better):")
+        print(ev["gg2_by_line"].round(4).to_string())
     bs = ev["bet_summary"]
     if bs.get("bets"):
         print("\nvalue bets (flat stakes, per-market edge thresholds):")
@@ -292,7 +295,8 @@ def cmd_evaluate(a):
         path = Path(a.html)
         path.parent.mkdir(parents=True, exist_ok=True)
         card = evaluate.card_html(f"Track record: {a.source}", ev["scores"], ev["baseline"],
-                                  ev["calibration"], ev["bet_summary"], vs_market=ev["vs_market"])
+                                  ev["calibration"], ev["bet_summary"], vs_market=ev["vs_market"],
+                                  by_line=ev["gg2_by_line"])
         for f in _write_track_record(path, card, ev, datetime.now(timezone.utc), "index.html",
                                      games=a.source == "live"):
             print(f"wrote {f}")
