@@ -10,6 +10,7 @@
 Prediction log (SQLite, data/predictions.db):
     python -m mbtgrandaudit predict --log            # store predictions
     python -m mbtgrandaudit snapshot-odds            # record closing odds shortly before kick-off
+    python -m mbtgrandaudit fetch-odds-apif          # every bookmaker's 1X2/O-U/BTTS for tomorrow (API-Football)
     python -m mbtgrandaudit settle                   # fill in final scores
     python -m mbtgrandaudit backfill --seasons 2     # add walk-forward history
     python -m mbtgrandaudit evaluate --source live --html reports/track_record.html
@@ -240,6 +241,25 @@ def cmd_snapshot_odds(a):
                 n += 1
     store.close()
     print(f"captured closing odds for {n} of {len(up)} fixtures")
+
+
+def cmd_fetch_odds_apif(a):
+    from .data import apifootball
+    key = apifootball.api_key()
+    if not key:
+        sys.exit("Set API_FOOTBALL_KEY (environment or .env) first.")
+    now = datetime.now(timezone.utc)
+    day = {"today": now, "tomorrow": now + timedelta(days=1)}.get(a.date) or pd.Timestamp(a.date)
+    client = apifootball.Client(key, budget=a.max_requests)
+    store = Store()
+    try:
+        st = apifootball.fetch(store, day, now, client)
+    finally:
+        store.close()
+    print(f"{pd.Timestamp(day):%Y-%m-%d}: {st['logged']} logged fixtures, {st['matched']} matched, "
+          f"{st['skipped']} already fetched, {st['with_odds']} of {st['fetched']} fetched had odds, "
+          f"{st['rows']} prices stored; {client.used} requests"
+          + (f", {client.remaining} left today" if client.remaining is not None else ""))
 
 
 def cmd_backfill(a):
@@ -595,6 +615,12 @@ def main(argv=None):
     p = sub.add_parser("snapshot-odds", help="record closing odds for logged fixtures kicking off soon")
     p.add_argument("--hours", type=float, default=3.0)
     p.set_defaults(fn=cmd_snapshot_odds)
+
+    p = sub.add_parser("fetch-odds-apif",
+                       help="store every bookmaker's 1X2, O/U 0.5-4.5 and BTTS prices from API-Football")
+    p.add_argument("--date", default="tomorrow", help="today, tomorrow or YYYY-MM-DD (free plan: ±1 day)")
+    p.add_argument("--max-requests", type=int, default=90, help="request budget for this run (free plan: 100/day)")
+    p.set_defaults(fn=cmd_fetch_odds_apif)
 
     p = sub.add_parser("backfill", help="write walk-forward backtest predictions into the log")
     common(p)
