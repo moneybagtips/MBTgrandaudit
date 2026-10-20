@@ -171,3 +171,83 @@ def test_market_view_uses_entered_prices():
     assert abs(high["home"] - plain["home"]) < 0.02           # 1X2 still matched
     both = implied_markets(base, extra={"btts_yes": 1.55, "btts_no": 2.35, "over_3.5": 2.6, "under_3.5": 1.45})
     assert {"BTTS", "O/U 3.5"} <= set(both["info"]["matched"])
+
+
+def _apif_fixture(fid, date, home, away):
+    return {"fixture": {"id": fid, "date": date}, "teams": {"home": {"name": home}, "away": {"name": away}}}
+
+
+def test_apifootball_parse_and_match():
+    from mbtgrandaudit.data.apifootball import match_fixtures, parse_odds
+    resp = [{"bookmakers": [
+        {"name": "Bet365", "bets": [
+            {"name": "Match Winner", "values": [{"value": "Home", "odd": "1.50"}, {"value": "Draw", "odd": "4.00"},
+                                                {"value": "Away", "odd": "6.00"}]},
+            {"name": "Goals Over/Under", "values": [{"value": "Over 1.5", "odd": "1.20"},
+                                                    {"value": "Under 1.5", "odd": "4.50"},
+                                                    {"value": "Over 2.25", "odd": "1.60"},    # Asian line: ignored
+                                                    {"value": "Over 5.5", "odd": "9.00"}]},   # beyond 4.5: ignored
+            {"name": "Both Teams Score", "values": [{"value": "Yes", "odd": "1.80"}, {"value": "No", "odd": "1.95"}]},
+            {"name": "Exact Score", "values": [{"value": "1:0", "odd": "7.00"}]}]},
+        {"name": "Pinnacle", "bets": [
+            {"name": "Match Winner", "values": [{"value": "Home", "odd": "1.55"}, {"value": "Draw", "odd": "bad"}]}]}]}]
+    got = parse_odds(resp)
+    assert ("Bet365", "over_1.5", 1.2) in got and ("Bet365", "btts_no", 1.95) in got
+    assert ("Pinnacle", "home", 1.55) in got
+    assert {k for _, k, _ in got} == {"home", "draw", "away", "over_1.5", "under_1.5", "btts_yes", "btts_no"}
+    ours = pd.DataFrame([
+        {"event_id": "1", "home": "Wolverhampton Wanderers", "away": "Portsmouth", "kickoff": "2026-10-20T19:00:00+00:00"},
+        {"event_id": "2", "home": "Manchester United", "away": "Leeds United", "kickoff": "2026-10-21T19:00:00+00:00"},
+        {"event_id": "3", "home": "Celtic", "away": "Rangers", "kickoff": "2026-10-21T12:00:00+00:00"}])
+    api = [_apif_fixture(11, "2026-10-20T19:00:00+00:00", "Wolves", "Portsmouth"),
+           _apif_fixture(12, "2026-10-21T19:00:00+00:00", "Manchester United", "Leeds"),
+           _apif_fixture(13, "2026-10-21T19:00:00+00:00", "Manchester City", "Leeds"),
+           _apif_fixture(14, "2026-10-22T12:00:00+00:00", "Celtic", "Rangers")]   # a day off: no match
+    assert match_fixtures(ours, api) == {"1": 11, "2": 12}
+
+
+def test_apifootball_fetch_stores_and_skips(tmp_path):
+    from datetime import datetime, timezone
+    from mbtgrandaudit.data.apifootball import Client, fetch
+    from mbtgrandaudit.storage import Store
+    m = poisson_matrix(1.5, 1.2)
+    st = Store(tmp_path / "t.db")
+    for ev, home, away in (("101", "Arsenal", "Chelsea"), ("102", "Everton", "Fulham")):
+        st.add_prediction(event_id=ev, league="EPL", home=home, away=away, model_home=home, model_away=away,
+                          kickoff=pd.Timestamp("2026-10-21 15:00", tz="UTC"), predicted_at=pd.Timestamp("2026-10-20"),
+                          version="v1", source="live", matrix=m, markets=markets(m), weights={}, features={},
+                          model_matrices={})
+    odds = {"bookmakers": [{"name": "Bet365", "bets": [
+        {"name": "Both Teams Score", "values": [{"value": "Yes", "odd": "1.70"}, {"value": "No", "odd": "2.10"}]}]}]}
+    calls = []
+
+    class Fake:
+        def __init__(self, path):
+            calls.append(path)
+            body = ([_apif_fixture(1, "2026-10-21T15:00:00+00:00", "Arsenal", "Chelsea"),
+                     _apif_fixture(2, "2026-10-21T15:00:00+00:00", "Everton", "Fulham")]
+                    if path.startswith("fixtures") else [odds])
+            self.data, self.headers = {"errors": [], "response": body}, {"x-ratelimit-requests-remaining": "50"}
+
+        def __enter__(self):
+            import io, json
+            r = io.StringIO(json.dumps(self.data))
+            r.headers = self.headers
+            return r
+
+        def __exit__(self, *a):
+            return False
+
+    client = Client("k", budget=10, min_interval=0, opener=lambda req, timeout: Fake(req.full_url.split(".io/")[1]))
+    now = datetime(2026, 10, 20, 7, tzinfo=timezone.utc)
+    s = fetch(st, datetime(2026, 10, 21, tzinfo=timezone.utc), now, client, log=lambda *_: None)
+    assert s["matched"] == 2 and s["rows"] == 4 and client.used == 3 and client.remaining == 50
+    mo = st.market_odds_for(["101", "102"])
+    assert len(mo) == 4 and set(mo["kind"]) == {"prediction"} and set(mo["bookmaker"]) == {"Bet365"}
+    s = fetch(st, datetime(2026, 10, 21, tzinfo=timezone.utc), now, client, log=lambda *_: None)
+    assert s["skipped"] == 2 and s["fetched"] == 0 and client.used == 4      # only the fixtures call
+    tight = Client("k", budget=2, min_interval=0, opener=lambda req, timeout: Fake(req.full_url.split(".io/")[1]))
+    later = datetime(2026, 10, 20, 21, tzinfo=timezone.utc)                    # past the 12h skip window
+    s = fetch(st, datetime(2026, 10, 21, tzinfo=timezone.utc), later, tight, log=lambda *_: None)
+    assert s["fetched"] == 1 and tight.used == 2                               # budget stops the run
+    st.close()

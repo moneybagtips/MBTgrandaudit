@@ -1,0 +1,30 @@
+name: API-Football odds
+
+# Daily, after Predict has logged the week's fixtures: store every bookmaker's 1X2,
+# O/U 0.5-4.5 and BTTS prices for tomorrow's logged fixtures (one request per game;
+# free plan: 100 requests/day, 10/minute, dates from yesterday to tomorrow only).
+on:
+  schedule:
+    - cron: "0 7 * * *"          # 07:00 UTC daily
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "today, tomorrow or YYYY-MM-DD"
+        default: tomorrow
+
+concurrency:
+  group: odds-apif
+  cancel-in-progress: false
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+  API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - run: python -m mbtgrandaudit fetch-odds-apif --date ${{ inputs.date || 'tomorrow' }}

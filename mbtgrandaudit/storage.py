@@ -272,6 +272,13 @@ class Store:
                              ["event_id", "market", "captured_at", "kind", "bookmaker"]),
                      (str(event_id), market, _iso(captured_at), kind, bookmaker or "", float(odds)))
 
+    def add_market_odds_many(self, rows):
+        """Rows of (event_id, market, odds, captured_at, kind, bookmaker) in one round trip."""
+        self.executemany(_upsert("market_odds", MARKET_ODDS_COLS,
+                                 ["event_id", "market", "captured_at", "kind", "bookmaker"]),
+                         [(str(ev), market, _iso(at), kind, book or "", float(odds))
+                          for ev, market, odds, at, kind, book in rows])
+
     # ----------------------------------------------------------------- reads
     def find_events(self, home: str, away: str, after: datetime | None = None) -> pd.DataFrame:
         """Logged live fixtures whose team names contain the given text (case-insensitive)."""
