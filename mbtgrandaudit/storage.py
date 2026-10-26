@@ -245,14 +245,16 @@ class Store:
                           for name, m in model_matrices.items() if m is not None])
         return pid
 
-    def add_live(self, pred, league: str, version: str, predicted_at: datetime) -> int:
+    def add_live(self, pred, league: str, version: str, predicted_at: datetime, source: str = "live") -> int:
+        """Log a live prediction. Comparison variants use their own source (e.g.
+        'live-pinnacle') and store no odds snapshot, so the main track record is unchanged."""
         fx = pred.fixture
         pid = self.add_prediction(
             event_id=fx.event_id, league=league, home=fx.home, away=fx.away,
             model_home=pred.home, model_away=pred.away, kickoff=fx.kickoff, predicted_at=predicted_at,
-            version=version, source="live", matrix=pred.matrix, markets=pred.ensemble,
+            version=version, source=source, matrix=pred.matrix, markets=pred.ensemble,
             weights=pred.weights, features=pred.features, model_matrices=pred.model_matrices)
-        if fx.odds:
+        if fx.odds and source == "live":
             self.add_odds(fx.event_id, predicted_at, "prediction", fx.odds)
         return pid
 
@@ -271,6 +273,13 @@ class Store:
         self.execute(_upsert("market_odds", MARKET_ODDS_COLS,
                              ["event_id", "market", "captured_at", "kind", "bookmaker"]),
                      (str(event_id), market, _iso(captured_at), kind, bookmaker or "", float(odds)))
+
+    def add_market_odds_many(self, rows):
+        """Rows of (event_id, market, odds, captured_at, kind, bookmaker) in one round trip."""
+        self.executemany(_upsert("market_odds", MARKET_ODDS_COLS,
+                                 ["event_id", "market", "captured_at", "kind", "bookmaker"]),
+                         [(str(ev), market, _iso(at), kind, book or "", float(odds))
+                          for ev, market, odds, at, kind, book in rows])
 
     # ----------------------------------------------------------------- reads
     def find_events(self, home: str, away: str, after: datetime | None = None) -> pd.DataFrame:
