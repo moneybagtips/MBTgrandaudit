@@ -251,3 +251,63 @@ def test_apifootball_fetch_stores_and_skips(tmp_path):
     s = fetch(st, datetime(2026, 10, 21, tzinfo=timezone.utc), later, tight, log=lambda *_: None)
     assert s["fetched"] == 1 and tight.used == 2                               # budget stops the run
     st.close()
+
+
+def test_entered_odds_ignores_fetched_feed(tmp_path):
+    from mbtgrandaudit.cli import _entered_odds
+    from mbtgrandaudit.storage import Store
+    st = Store(tmp_path / "t.db")
+    st.add_market_odds("101", "gg2_yes", 6.5, pd.Timestamp("2026-10-20 08:00", tz="UTC"), "manual", "Book")
+    st.add_market_odds_many([("101", "gg2_yes", 9.0, pd.Timestamp("2026-10-20 09:00", tz="UTC"), "prediction", "Bet365"),
+                             ("101", "btts_yes", 1.7, pd.Timestamp("2026-10-20 09:00", tz="UTC"), "prediction", "Bet365")])
+    st.add_market_odds("101", "gg2_no", 1.05, pd.Timestamp("2026-10-20 10:00", tz="UTC"), "closing", "Book")
+    st.commit()
+    assert _entered_odds(["101"], st) == {"101": {"gg2_yes": 6.5}}
+    st.close()
+
+
+def test_pinnacle_variant_inputs_and_differences():
+    from mbtgrandaudit.data.apifootball import differences, variant_inputs
+    espn = {"H": 2.0, "D": 3.4, "A": 3.9, "line": 3.5, "over": 2.4, "under": 1.6, "source": "DraftKings"}
+    book = {"home": 1.9, "draw": 3.6, "away": 4.2, "over_2.5": 1.8, "under_2.5": 2.05, "over_1.5": 1.25,
+            "btts_yes": 1.7, "btts_no": 2.1}
+    odds, extra = variant_inputs(book, espn, {"gg2_yes": 6.5})
+    assert odds == {"H": 1.9, "D": 3.6, "A": 4.2, "source": "Pinnacle", "line": 2.5, "over": 1.8, "under": 2.05}
+    assert extra == {"gg2_yes": 6.5, "over_1.5": 1.25, "btts_yes": 1.7, "btts_no": 2.1}
+    odds, extra = variant_inputs({"btts_yes": 1.7}, espn, None)     # no Pinnacle 1X2: keep ESPN's
+    assert odds == espn and extra == {"btts_yes": 1.7}
+    assert variant_inputs({}, espn, None) is None and variant_inputs({"btts_yes": 1.7}, None, None) is None
+    main = markets(poisson_matrix(1.4, 1.3))
+    other = markets(poisson_matrix(1.1, 1.6))
+    d = differences(main, other)
+    assert d["pick_changed"] and d["main_pick"] == "home" and d["variant_pick"] == "away"
+    assert "1" in {label for label, _, _ in d["moved"]}
+    assert differences(main, main) == {"pick_changed": False, "main_pick": "home", "variant_pick": "home", "moved": []}
+
+
+def test_variant_logged_apart_from_main(tmp_path):
+    from types import SimpleNamespace
+    from mbtgrandaudit.cli import _add_variants
+    from mbtgrandaudit.storage import Store
+    m = poisson_matrix(1.5, 1.2)
+
+    def make(f, extra=None):
+        return SimpleNamespace(fixture=f, home="A", away="B", matrix=m, ensemble=markets(m), weights={},
+                               features={"extra": extra}, model_matrices={}, variant=None)
+
+    from mbtgrandaudit.data.espn import Fixture
+    fx = Fixture("101", pd.Timestamp("2099-01-01 15:00", tz="UTC"), "EPL", "A", "B")
+    fx.odds = {"H": 2.0, "D": 3.4, "A": 3.9}
+    main = make(fx)
+    _add_variants(SimpleNamespace(predict=make), [main], {"101": {"gg2_yes": 6.5}},
+                  book_odds={"101": {"home": 1.9, "draw": 3.6, "away": 4.2, "btts_yes": 1.7}})
+    assert main.variant.fixture.odds["source"] == "Pinnacle" and main.fixture.odds["H"] == 2.0
+    assert main.variant.features["extra"] == {"gg2_yes": 6.5, "btts_yes": 1.7}
+    st = Store(tmp_path / "t.db")
+    st.add_live(main, "EPL", "v1", pd.Timestamp("2026-10-20", tz="UTC"))
+    st.add_live(main.variant, "EPL", "v1", pd.Timestamp("2026-10-20", tz="UTC"), source="live-pinnacle")
+    st.add_result("101", "EPL", 1, 0, "test")
+    st.commit()
+    assert len(st.settled(source="live")) == 1 and len(st.settled(source="live-pinnacle")) == 1
+    assert len(st.odds_for(["101"])) == 1            # only the main prediction stores an odds snapshot
+    st.close()

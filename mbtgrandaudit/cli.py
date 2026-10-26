@@ -18,6 +18,7 @@ Prediction log (SQLite, data/predictions.db):
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import re
@@ -31,7 +32,7 @@ import pandas as pd
 
 from . import backtest, evaluate, report
 from .config import LEAGUES, MAJOR, Settings, market_group
-from .data import espn, footballdata as fd
+from .data import apifootball, espn, footballdata as fd
 from .data.espn import Fixture
 from .predictor import LeaguePredictor
 from . import storage
@@ -93,6 +94,7 @@ def cmd_predict(a):
         print(f"[{key}] analysing {len(fx)} fixtures (form + head-to-head across all competitions)")
         extra = _entered_odds([f.event_id for f in fx])
         preds = [p.predict(f, extra.get(f.event_id)) for f in fx]
+        _add_variants(p, preds, extra)
         by_league[LEAGUES[key].name] = preds
         print(report.console(preds, a.detail))
         records += report.to_records(preds, key)
@@ -101,28 +103,70 @@ def cmd_predict(a):
             version, now = model_version(s), datetime.now(timezone.utc)
             for pr in preds:
                 store.add_live(pr, key, version, now)
+                if pr.variant is not None:
+                    store.add_live(pr.variant, key, version, now, source=apifootball.VARIANT_SOURCE)
             store.close()
-            print(f"[{key}] logged {len(preds)} predictions (model version {version})")
+            n_var = sum(pr.variant is not None for pr in preds)
+            print(f"[{key}] logged {len(preds)} predictions (model version {version})"
+                  + (f" + {n_var} {apifootball.VARIANT_BOOK} variants" if n_var else ""))
     _write_outputs(a, by_league, records, idle, a.days)
 
 
-def _entered_odds(event_ids) -> dict:
-    """{event_id: {market: latest odds}} from the market_odds table (e.g. `odds add`)."""
-    if not storage.configured():
-        return {}
-    store = Store()
-    try:
-        mo = store.market_odds_for(event_ids)
-    finally:
-        store.close()
+def _entered_odds(event_ids, store: Store | None = None) -> dict:
+    """{event_id: {market: latest odds}} from hand-entered prices (`odds add`, the odds form).
+
+    Fetched bookmaker feeds (kind 'prediction', e.g. fetch-odds-apif) are left out: they
+    are there to measure ROI, and with ~10 bookmakers per game the latest row would be
+    an arbitrary one."""
+    if store is None:
+        if not storage.configured():
+            return {}
+        own = Store()
+        try:
+            return _entered_odds(event_ids, own)
+        finally:
+            own.close()
+    mo = store.market_odds_for(event_ids)
     if mo.empty:
         return {}
-    mo = mo[mo["kind"] != "closing"].sort_values("captured_at")
+    mo = mo[mo["kind"] == "manual"].sort_values("captured_at")
     latest = mo.groupby(["event_id", "market"])["odds"].last()
     out: dict = {}
     for (ev, market), o in latest.items():
         out.setdefault(ev, {})[market] = float(o)
     return out
+
+
+def _book_odds(event_ids, book: str, store: Store | None = None) -> dict:
+    """{event_id: {market: latest odds}} from one bookmaker in the fetched feed."""
+    if store is None:
+        if not storage.configured():
+            return {}
+        own = Store()
+        try:
+            return _book_odds(event_ids, book, own)
+        finally:
+            own.close()
+    mo = store.market_odds_for(event_ids)
+    if mo.empty:
+        return {}
+    mo = mo[(mo["kind"] == "prediction") & (mo["bookmaker"] == book)].sort_values("captured_at")
+    out: dict = {}
+    for (ev, market), o in mo.groupby(["event_id", "market"])["odds"].last().items():
+        out.setdefault(ev, {})[market] = float(o)
+    return out
+
+
+def _add_variants(p, preds, manual: dict, book_odds: dict | None = None):
+    """Second prediction per fixture with the bookmaker feed's prices in the market view,
+    for comparison only; the main prediction (hand-entered prices only) is unchanged."""
+    if book_odds is None:
+        book_odds = _book_odds([pr.fixture.event_id for pr in preds], apifootball.VARIANT_BOOK)
+    for pr in preds:
+        fx = pr.fixture
+        inputs = apifootball.variant_inputs(book_odds.get(fx.event_id), fx.odds, manual.get(fx.event_id))
+        if inputs is not None:
+            pr.variant = p.predict(dataclasses.replace(fx, odds=inputs[0]), inputs[1])
 
 
 def _track_record_page(source: str | None = None) -> tuple[str, dict] | None:
@@ -244,7 +288,6 @@ def cmd_snapshot_odds(a):
 
 
 def cmd_fetch_odds_apif(a):
-    from .data import apifootball
     key = apifootball.api_key()
     if not key:
         sys.exit("Set API_FOOTBALL_KEY (environment or .env) first.")
@@ -628,7 +671,8 @@ def main(argv=None):
     p.set_defaults(fn=cmd_backfill)
 
     p = sub.add_parser("evaluate", help="score the prediction log: accuracy, calibration, ROI, CLV")
-    p.add_argument("--source", choices=["live", "backtest", "all"], default="live")
+    p.add_argument("--source", choices=["live", apifootball.VARIANT_SOURCE, "backtest", "all"], default="live",
+                   help=f"{apifootball.VARIANT_SOURCE}: the comparison variant fed {apifootball.VARIANT_BOOK}'s prices")
     p.add_argument("--league", "-l", nargs=1, help="one league key")
     p.add_argument("--version", help="only this model version")
     p.add_argument("--since", help="only kickoffs on/after this date (YYYY-MM-DD)")

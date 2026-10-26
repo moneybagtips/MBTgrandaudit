@@ -7,6 +7,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from .data import apifootball
 from .models import build_models
 from .config import Settings
 
@@ -142,6 +143,8 @@ font:inherit;font-size:12.5px;cursor:pointer}
 .hit{color:var(--acc)}.miss{color:var(--bar3)}td.hit,td.miss{white-space:nowrap}
 th.l,td.l{text-align:left}.nw{white-space:nowrap}
 .note{border-left:4px solid var(--warn)}
+.variant{border:1px dashed var(--line);border-radius:10px;padding:6px 10px;margin-top:10px}
+.diff{color:var(--warn);font-weight:600}td.diff{background:var(--acc-soft)}
 table.odds input.price{width:68px;padding:3px 4px;border:1px solid var(--line);border-radius:6px;
 background:var(--card);color:var(--ink);font:inherit;font-size:12.5px}
 table.odds td{vertical-align:top}.edge{display:inline-block;min-width:3.5em;margin-left:4px;font-size:12px}
@@ -241,12 +244,13 @@ def _match_card(p) -> str:
         f"<td>{pct(m['away'])}</td><td>{pct(m['btts_yes'])}</td><td>{pct(m['gg2_yes'])}</td>"
         f"<td>{pct(m['over_2.5'])}</td></tr>" for n, m in p.per_model.items())
     warns = "".join(f'<div class="warn">{html.escape(w)}</div>' for w in p.warnings)
+    variant = _variant_box(p)
     return f"""
 <div class="card" id="{match_anchor(fx)}"><div class="head"><h2>{html.escape(fx.home)} <span class="mute">vs</span> {html.escape(fx.away)}</h2>
 <span class="mute">{_local(fx.kickoff)}{' · ' + html.escape(fx.venue) if fx.venue else ''}</span></div>
 <div class="row mute" style="margin:6px 0"><span>Expected goals {e['xg_home']:.2f} – {e['xg_away']:.2f}</span>
 <span>1 · X · 2</span></div>{_bar(e)}{market}
-<div style="margin-top:10px">{picks}</div>
+<div style="margin-top:10px">{picks}</div>{variant}
 <div class="grid">
 <div class="box"><h3>Goals markets</h3><div class="row"><span>BTTS yes</span><span><b>{pct(e['btts_yes'])}</b>{mv('btts_yes')}</span></div>
 <div class="row"><span>GG2+ yes</span><span><b>{pct(e['gg2_yes'])}</b>{mv('gg2_yes')}</span></div>
@@ -260,6 +264,37 @@ def _match_card(p) -> str:
 <details><summary>Model breakdown ({len(p.per_model)} components)</summary><div class="scroll"><table>
 <tr><th>Model</th><th>Weight</th><th>xG</th><th>1</th><th>X</th><th>2</th><th>BTTS</th><th>GG2+</th><th>O2.5</th></tr>
 {models}</table></div></details>{warns}</div>"""
+
+
+DIFF_ATTR = ' class="diff"'
+
+
+def _variant_box(p) -> str:
+    """The Pinnacle-fed variant beside the main prediction, with the differences marked:
+    a different 1X2 pick, or a market moved by 5+ points."""
+    v = getattr(p, "variant", None)
+    if v is None:
+        return ""
+    e, ve = p.ensemble, v.ensemble
+    d = apifootball.differences(e, ve)
+    moved = {label for label, _, _ in d["moved"]}
+    cells = "".join(
+        f'<td{" class=\'diff\'" if label in moved else ""}>{pct(e[k])} → <b>{pct(ve[k])}</b></td>'
+        for k, label in apifootball.DIFF_MARKETS if k in e and k in ve)
+    heads = "".join(f"<th>{label}</th>" for k, label in apifootball.DIFF_MARKETS if k in e and k in ve)
+    names = {"home": "1", "draw": "X", "away": "2"}
+    if d["pick_changed"]:
+        summary = (f'<span class="diff">1X2 pick changes: {names[d["main_pick"]]} → '
+                   f'{names[d["variant_pick"]]}</span>')
+    elif d["moved"]:
+        summary = f'<span class="diff">{len(d["moved"])} market(s) move 5+ points</span>'
+    else:
+        summary = '<span class="mute">no market moves 5+ points</span>'
+    return (f'<details class="variant"{" open" if d["pick_changed"] or d["moved"] else ""}>'
+            f'<summary>With {apifootball.VARIANT_BOOK} prices (comparison): {summary}</summary>'
+            f'<div class="scroll"><table><tr>{heads}</tr><tr>{cells}</tr></table></div>'
+            f'<div class="mute small">Main prediction → same models with {apifootball.VARIANT_BOOK}\'s 1X2, '
+            f'O/U and BTTS prices in the market view. The main prediction is the one tracked.</div></details>')
 
 
 DRAWS_FILE = "draws.html"
