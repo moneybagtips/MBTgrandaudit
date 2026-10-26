@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import backtest, evaluate, report
+from . import backtest, evaluate, report, shortlist
 from .config import LEAGUES, MAJOR, Settings, market_group
 from .data import apifootball, espn, footballdata as fd
 from .data.espn import Fixture
@@ -196,7 +196,7 @@ def _write_track_record(path: Path, card: str, ev: dict, now, home: str, games: 
     Game-by-game lists are for live predictions only (the backfill holds thousands)."""
     if games is None:
         games = set(ev["preds"]["source"]) == {"live"}
-    nav_home = f'<a href="{home}">← Predictions</a>'
+    nav_home = f'<a href="{home}">← Predictions</a> · <a href="{report.SHORTLIST_FILE}">80% shortlist</a>'
     written = []
     body = card
     if games:
@@ -595,6 +595,25 @@ def cmd_backtest(a):
             print("saved to ensemble_weights.json - used automatically for", key)
 
 
+def _write_shortlist(path: Path, now, home: str, track_record: str | None = "track_record.html"):
+    nav = f'<a href="{home}">← Predictions</a>' + (f' · <a href="{track_record}">Track record</a>'
+                                                     if track_record else "")
+    store = Store()
+    try:
+        up, done = shortlist.write(store, path, now, nav)
+    finally:
+        store.close()
+    print(f"wrote {path} ({len(up)} upcoming picks, {len(done)} settled)")
+
+
+def cmd_shortlist(a):
+    if not storage.configured():
+        sys.exit("No prediction log yet.")
+    path = Path(a.html)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_shortlist(path, datetime.now(timezone.utc), "index.html")
+
+
 def _write_outputs(a, by_league, records, idle: dict | None = None, days: int | None = None):
     for opt in ("json", "csv", "html"):
         if getattr(a, opt, None):
@@ -617,6 +636,8 @@ def _write_outputs(a, by_league, records, idle: dict | None = None, days: int | 
         for f in report.html_report(by_league, path, now, tr_name, idle, days, _github_repo(),
                                     _settings(a).min_edge):
             print(f"wrote {f}")
+        if storage.configured():
+            _write_shortlist(path.with_name(report.SHORTLIST_FILE), now, path.name, tr_name)
         if a.open:
             webbrowser.open(path.resolve().as_uri())
 
@@ -665,6 +686,10 @@ def main(argv=None):
     p.add_argument("--date", default="tomorrow", help="today, tomorrow or YYYY-MM-DD (free plan: ±1 day)")
     p.add_argument("--max-requests", type=int, default=90, help="request budget for this run (free plan: 100/day)")
     p.set_defaults(fn=cmd_fetch_odds_apif)
+
+    p = sub.add_parser("shortlist", help="write the 80% shortlist page: upcoming picks and their running record")
+    p.add_argument("--html", default="reports/shortlist.html")
+    p.set_defaults(fn=cmd_shortlist)
 
     p = sub.add_parser("backfill", help="write walk-forward backtest predictions into the log")
     common(p)
