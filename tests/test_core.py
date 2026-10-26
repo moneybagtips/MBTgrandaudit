@@ -135,6 +135,18 @@ def test_postgres_store_matches_sqlite(tmp_path):
         lite.close()
 
 
+def test_day_filter_markup():
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from mbtgrandaudit import report
+    chips = report.day_chips()
+    for k, label in report.DAY_FILTERS:
+        assert f'data-days="{k}"' in chips and label in chips
+    assert chips.count('aria-pressed="true"') == 1 and 'data-days="all" aria-pressed="true"' in chips
+    fx = SimpleNamespace(kickoff=datetime(2026, 10, 26, 19, 45, tzinfo=timezone.utc))
+    assert report._ko(fx) == ' data-ko="2026-10-26T19:45:00+00:00"'
+
+
 def test_odds_issue_import(tmp_path):
     from datetime import datetime, timezone
     from mbtgrandaudit.cli import _apply_issue, _parse_issue
