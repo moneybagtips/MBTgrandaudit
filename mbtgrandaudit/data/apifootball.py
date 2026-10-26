@@ -172,3 +172,43 @@ def fetch(store, day: datetime, now: datetime, client: Client, log=print, skip_h
         log(f"  {ev.league} {ev.home} v {ev.away}: {len(prices)} prices from "
             f"{len({b for b, _, _ in prices})} bookmakers")
     return stats
+
+
+# ------------------------------------------------------- Pinnacle comparison variant
+VARIANT_BOOK = "Pinnacle"          # sharpest book in the feed
+VARIANT_SOURCE = "live-pinnacle"   # logged apart from 'live', so it never enters the main track record
+
+
+def variant_inputs(book: dict, espn_odds: dict | None, manual: dict | None) -> tuple[dict, dict] | None:
+    """(fixture odds, extra odds) for a prediction whose market view uses the book's prices.
+
+    book: {markets() key: decimal odds} from the fetched feed. Its 1X2 replaces the ESPN
+    1X2 and its O/U 2.5 the main line; its other O/U lines and BTTS are matched as extra
+    prices, on top of any hand-entered ones (e.g. GG2+). None if the book has nothing."""
+    if not book:
+        return None
+    odds = dict(espn_odds or {})
+    if all(k in book for k in ("home", "draw", "away")):
+        odds = {"H": book["home"], "D": book["draw"], "A": book["away"], "source": VARIANT_BOOK}
+        if "over_2.5" in book and "under_2.5" in book:
+            odds |= {"line": 2.5, "over": book["over_2.5"], "under": book["under_2.5"]}
+    if not all(k in odds for k in ("H", "D", "A")):
+        return None
+    extra = dict(manual or {}) | {k: v for k, v in book.items()
+                                  if k not in ("home", "draw", "away")
+                                  and not (odds.get("line") == 2.5 and k in ("over_2.5", "under_2.5"))}
+    return odds, extra
+
+
+DIFF_MARKETS = [("home", "1"), ("draw", "X"), ("away", "2"), ("btts_yes", "BTTS"), ("gg2_yes", "GG2+"),
+                ("over_1.5", "O1.5"), ("over_2.5", "O2.5"), ("over_3.5", "O3.5"), ("under_4.5", "U4.5")]
+
+
+def differences(main: dict, other: dict, points: float = 0.05) -> dict:
+    """Where the Pinnacle variant disagrees with the main prediction: a different 1X2 pick,
+    or markets whose probability moved by ``points`` or more."""
+    pick = lambda e: max(("home", "draw", "away"), key=lambda k: e[k])
+    moved = [(label, main[k], other[k]) for k, label in DIFF_MARKETS
+             if k in main and k in other and abs(other[k] - main[k]) >= points - 1e-9]
+    return {"pick_changed": pick(main) != pick(other), "main_pick": pick(main), "variant_pick": pick(other),
+            "moved": moved}

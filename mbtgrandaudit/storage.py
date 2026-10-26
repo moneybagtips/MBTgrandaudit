@@ -245,14 +245,16 @@ class Store:
                           for name, m in model_matrices.items() if m is not None])
         return pid
 
-    def add_live(self, pred, league: str, version: str, predicted_at: datetime) -> int:
+    def add_live(self, pred, league: str, version: str, predicted_at: datetime, source: str = "live") -> int:
+        """Log a live prediction. Comparison variants use their own source (e.g.
+        'live-pinnacle') and store no odds snapshot, so the main track record is unchanged."""
         fx = pred.fixture
         pid = self.add_prediction(
             event_id=fx.event_id, league=league, home=fx.home, away=fx.away,
             model_home=pred.home, model_away=pred.away, kickoff=fx.kickoff, predicted_at=predicted_at,
-            version=version, source="live", matrix=pred.matrix, markets=pred.ensemble,
+            version=version, source=source, matrix=pred.matrix, markets=pred.ensemble,
             weights=pred.weights, features=pred.features, model_matrices=pred.model_matrices)
-        if fx.odds:
+        if fx.odds and source == "live":
             self.add_odds(fx.event_id, predicted_at, "prediction", fx.odds)
         return pid
 
