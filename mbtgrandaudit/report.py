@@ -301,6 +301,7 @@ def _variant_box(p) -> str:
 
 
 DRAWS_FILE = "draws.html"
+SHORTLIST_FILE = "shortlist.html"
 
 # League filter for tables. Each .filter-wrap holds chips (data-league) and a
 # table.filterable whose rows carry data-league; excluded leagues are kept in localStorage
@@ -649,7 +650,8 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
     tr_link = (f'<a href="{html.escape(track_record)}">Track record</a>' if track_record
                else '<span class="mute">Track record (none yet)</span>')
     nav = (f'<a href="{html.escape(main_name)}">← All leagues</a> · <a href="{PREDICTIONS_FILE}">All predictions</a>'
-           f' · <a href="{DRAWS_FILE}">Draws</a> · <a href="{ODDS_FILE}">Enter odds</a> · {tr_link}')
+           f' · <a href="{DRAWS_FILE}">Draws</a> · <a href="{SHORTLIST_FILE}">80% shortlist</a>'
+           f' · <a href="{ODDS_FILE}">Enter odds</a> · {tr_link}')
     written = []
 
     def link(lg, fx):
@@ -781,13 +783,18 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
         tr_card = ('<div class="card"><h2>Track record</h2><div class="mute">Not available yet: it appears once '
                    'logged predictions (or a backfill) have settled results.</div></div>')
 
+    shortlist_card = (f'<div class="card"><div class="head"><h2>80% shortlist</h2>'
+                      f'<a href="{SHORTLIST_FILE}">Open shortlist →</a></div>'
+                      '<div class="mute" style="margin-top:4px">Picks the model rates at 80% or more on priced '
+                      'markets, with the best, Bet365 and Pinnacle prices, and their running hit rate and '
+                      'profit.</div></div>')
     body = (f'<div class="mute">{len(allp)} fixtures · {len(preds_by_league)} leagues · ensemble of '
             f'{len(MODEL_DESC)} components · probabilities, not certainties</div>'
             f'{leagues_card}<div class="card"><h2>Strongest calls by market</h2><div class="grid">'
-            f'{"".join(boards)}</div></div>{draws_card}{tr_card}')
+            f'{"".join(boards)}</div></div>{draws_card}{shortlist_card}{tr_card}')
     main = page("MBTgrandaudit predictions", body, generated,
                 f'<a href="{PREDICTIONS_FILE}">All predictions</a> · <a href="{DRAWS_FILE}">Draws</a> · '
-                f'<a href="{ODDS_FILE}">Enter odds</a> · {tr_link}')
+                f'<a href="{SHORTLIST_FILE}">80% shortlist</a> · <a href="{ODDS_FILE}">Enter odds</a> · {tr_link}')
     path.write_text(with_filter_js(main), encoding="utf-8")
     written.insert(0, path)
     return written
