@@ -102,6 +102,7 @@ def cmd_predict(a):
             store = Store()
             version, now = model_version(s), datetime.now(timezone.utc)
             for pr in preds:
+                pr.features[evaluate.FEED_FLAG] = 1.0     # market view used hand-entered prices only
                 store.add_live(pr, key, version, now)
                 if pr.variant is not None:
                     store.add_live(pr.variant, key, version, now, source=apifootball.VARIANT_SOURCE)
