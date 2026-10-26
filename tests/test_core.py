@@ -311,3 +311,27 @@ def test_variant_logged_apart_from_main(tmp_path):
     assert len(st.settled(source="live")) == 1 and len(st.settled(source="live-pinnacle")) == 1
     assert len(st.odds_for(["101"])) == 1            # only the main prediction stores an odds snapshot
     st.close()
+
+
+def test_feed_tainted_live_predictions_excluded(tmp_path):
+    from mbtgrandaudit.evaluate import FEED_FLAG, load
+    from mbtgrandaudit.storage import Store
+    m = poisson_matrix(1.5, 1.2)
+    st = Store(tmp_path / "t.db")
+    fetched = pd.Timestamp("2026-10-20 12:15", tz="UTC")
+    for ev, predicted, feats, source in (
+            ("1", "2026-10-21 06:31", {}, "live"),                    # old code, after the fetch: tainted
+            ("2", "2026-10-21 06:31", {FEED_FLAG: 1.0}, "live"),      # feed kept out: kept
+            ("3", "2026-10-20 06:00", {}, "live"),                    # made before the fetch: kept
+            ("1", "2026-10-21 06:31", {}, "live-pinnacle")):          # the variant is meant to use it
+        st.add_prediction(event_id=ev, league="EPL", home="A", away="B", model_home="A", model_away="B",
+                          kickoff=pd.Timestamp("2026-10-21 18:00", tz="UTC"), predicted_at=pd.Timestamp(predicted, tz="UTC"),
+                          version="v1", source=source, matrix=m, markets=markets(m), weights={}, features=feats,
+                          model_matrices={})
+        st.add_market_odds(ev, "btts_yes", 1.7, fetched, "prediction", "Pinnacle")
+        st.add_result(ev, "EPL", 1, 1, "test")
+    st.add_market_odds("2", "gg2_yes", 6.5, fetched, "manual", "Book")
+    st.commit()
+    assert sorted(load(st, source="live")[0]["event_id"]) == ["2", "3"]
+    assert list(load(st, source="live-pinnacle")[0]["event_id"]) == ["1"]
+    st.close()

@@ -85,9 +85,34 @@ def head_to_head(preds: pd.DataFrame, model: pd.DataFrame, market: pd.DataFrame)
     return pd.DataFrame(rows).T
 
 
+FEED_FLAG = "feed_excluded"   # set in features by predict once fetched feeds are kept out
+
+
+def drop_feed_tainted(store: Store, preds: pd.DataFrame) -> pd.DataFrame:
+    """Drop main ('live') predictions whose market view used fetched bookmaker feeds.
+
+    Before predict kept the fetched feed (market_odds kind 'prediction') out, a run made
+    after a fetch fed those prices into the main prediction (e.g. the 2026-10-21 06:31 run
+    for the 12 fixtures fetched on 2026-10-20). Such a prediction has no FEED_FLAG and was
+    made after feed rows existed for its event; its fixture is left out of the live record."""
+    if preds.empty or "features" not in preds:
+        return preds
+    live = preds["source"] == "live"
+    if not live.any():
+        return preds
+    mo = store.market_odds_for(preds.loc[live, "event_id"])
+    if mo.empty:
+        return preds
+    first = mo[mo["kind"] == "prediction"].groupby("event_id")["captured_at"].min()
+    fed = preds["event_id"].astype(str).map(first).fillna("9999")   # ISO strings sort chronologically
+    flagged = preds["features"].map(lambda f: FEED_FLAG in json.loads(f) if isinstance(f, str) else False)
+    tainted = live & (fed <= preds["predicted_at"]) & ~flagged
+    return preds[~tainted].reset_index(drop=True)
+
+
 def load(store: Store, **filters) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     """Settled predictions with market probabilities for the ensemble and each model."""
-    preds = store.settled(**filters)
+    preds = drop_feed_tainted(store, store.settled(**filters))
     if preds.empty:
         return preds, {}
     preds["hg"], preds["ag"] = preds["home_goals"].to_numpy(), preds["away_goals"].to_numpy()
