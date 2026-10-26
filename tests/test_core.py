@@ -335,3 +335,41 @@ def test_feed_tainted_live_predictions_excluded(tmp_path):
     assert sorted(load(st, source="live")[0]["event_id"]) == ["2", "3"]
     assert list(load(st, source="live-pinnacle")[0]["event_id"]) == ["1"]
     st.close()
+
+
+def test_shortlist_upcoming_and_record(tmp_path):
+    from datetime import datetime, timezone
+    from mbtgrandaudit import shortlist
+    from mbtgrandaudit.evaluate import FEED_FLAG
+    from mbtgrandaudit.storage import Store
+    m = poisson_matrix(2.6, 0.4)          # strong home side: home win and over 0.5 clear 80%
+    mk = markets(m)
+    assert mk["home"] >= 0.8 and mk["over_0.5"] >= 0.8
+    st = Store(tmp_path / "t.db")
+    for ev, ko in (("1", "2026-10-20 15:00"), ("2", "2099-01-01 15:00")):
+        st.add_prediction(event_id=ev, league="EPL", home="H", away="A", model_home="H", model_away="A",
+                          kickoff=pd.Timestamp(ko, tz="UTC"), predicted_at=pd.Timestamp("2026-10-20 06:00", tz="UTC"),
+                          version="v1", source="live", matrix=m, markets=mk, weights={}, features={FEED_FLAG: 1.0},
+                          model_matrices={})
+        at = pd.Timestamp("2026-10-20 07:00", tz="UTC")
+        st.add_market_odds_many([(ev, "home", 1.30, at, "prediction", "Bet365"),
+                                 (ev, "home", 1.33, at, "prediction", "Pinnacle"),
+                                 (ev, "home", 1.40, at, "prediction", "Betano"),
+                                 (ev, "home", 1.90, pd.Timestamp("2026-10-20 16:00", tz="UTC"), "prediction", "Late")])
+    st.add_odds("1", pd.Timestamp("2026-10-20 06:00", tz="UTC"), "prediction",
+                {"H": 1.35, "D": 5.0, "A": 9.0, "line": 2.5, "over": 1.5, "under": 2.5, "source": "DraftKings"})
+    st.add_result("1", "EPL", 0, 1, "test")                       # the home pick loses
+    st.commit()
+    up = shortlist.upcoming(st, datetime(2026, 10, 21, tzinfo=timezone.utc))
+    home = up[up["key"] == "home"].iloc[0]
+    assert set(up["event_id"]) == {"2"} and home["best"] == 1.90      # future fixture: every quote is pre-kick-off
+    done = shortlist.settled(st)
+    h = done[done["key"] == "home"].iloc[0]
+    assert (h["best"], h["best_book"], h["bet365"], h["pinnacle"]) == (1.40, "Betano", 1.30, 1.33)   # late quote ignored
+    assert not h["won"] and bool(done[done["key"] == "over_0.5"]["won"].iloc[0])
+    rec = shortlist.record(done)
+    assert rec["bet365"]["all"]["n"] == 1 and rec["bet365"]["all"]["profit"] == -1.0
+    assert rec["best"]["market"]["1X2"]["n"] == 1 and "O/U 0.5" not in {k for k, v in rec["best"]["market"].items() if v["n"]}
+    body = shortlist.page_body(up, done)
+    assert "Running record" in body and "Late" in body      # upcoming best-price bookmaker
+    st.close()
