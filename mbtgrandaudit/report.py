@@ -140,6 +140,9 @@ font:inherit;font-size:12.5px;cursor:pointer}
 .chip[aria-pressed="true"]{border-color:var(--bar);background:var(--acc-soft)}
 .chip[aria-pressed="false"]{opacity:.5;text-decoration:line-through}
 .chip-all{font-weight:600}tr[hidden]{display:none}
+.day-chips[hidden]{display:none}.day-chips{margin-top:14px}
+.day-chips .chip[aria-pressed="false"]{opacity:1;text-decoration:none}
+.day-chips .chip[aria-pressed="true"]{font-weight:600}
 .hit{color:var(--acc)}.miss{color:var(--bar3)}td.hit,td.miss{white-space:nowrap}
 th.l,td.l{text-align:left}.nw{white-space:nowrap}
 .note{border-left:4px solid var(--warn)}
@@ -303,14 +306,32 @@ DRAWS_FILE = "draws.html"
 # table.filterable whose rows carry data-league; excluded leagues are kept in localStorage
 # per data-key, so e.g. the main page and draws.html share one choice. A table shows the
 # first data-limit rows that survive the filter (0 = all), renumbered in td.rk if present.
+# A wrap without data-key has no league chips and only takes the day filter.
+# Day filter: a page with .day-chips (see day_chips) also filters every table.filterable by
+# its rows' data-ko kick-off, in calendar days on the viewer's clock; the choice is shared
+# by all pages under one localStorage key.
 FILTER_JS = """(function(){
-document.querySelectorAll('.filter-wrap').forEach(function(w){
-  var KEY='mbt-filter-'+w.dataset.key, off;
-  try{off=new Set(JSON.parse(localStorage.getItem(KEY)||'[]'));}catch(e){off=new Set();}
-  function apply(){
-    var t=w.querySelector('table.filterable'), lim=parseInt(t.dataset.limit||'0',10)||Infinity, n=0;
+var DKEY='mbt-days', bar=document.querySelector('.day-chips'), days='all';
+var SPAN={today:[0,1],tomorrow:[1,2],'3':[0,3],'5':[0,5]};
+if(bar){try{days=localStorage.getItem(DKEY)||'all';}catch(e){} if(!SPAN[days]){days='all';} bar.hidden=false;}
+function bounds(){
+  if(!bar||!SPAN[days]){return null;}
+  var a=new Date(), b; a.setHours(0,0,0,0); b=new Date(a);
+  a.setDate(a.getDate()+SPAN[days][0]); b.setDate(b.getDate()+SPAN[days][1]);
+  return [a.getTime(),b.getTime()];
+}
+var wraps=Array.prototype.slice.call(document.querySelectorAll('.filter-wrap'));
+wraps.forEach(function(w){
+  w._key=w.dataset.key?'mbt-filter-'+w.dataset.key:null; w._off=new Set();
+  if(w._key){try{w._off=new Set(JSON.parse(localStorage.getItem(w._key)||'[]'));}catch(e){}}
+});
+function apply(){
+  var win=bounds();
+  wraps.forEach(function(w){
+    var off=w._off, t=w.querySelector('table.filterable'), lim=parseInt(t.dataset.limit||'0',10)||Infinity, n=0;
     t.querySelectorAll('tbody tr').forEach(function(r){
-      var show=!off.has(r.dataset.league)&&n<lim;
+      var ko=r.dataset.ko?Date.parse(r.dataset.ko):NaN;
+      var show=!off.has(r.dataset.league)&&(!win||isNaN(ko)||(ko>=win[0]&&ko<win[1]))&&n<lim;
       if(show){n++;var rk=r.querySelector('.rk');if(rk){rk.textContent=n;}}
       r.hidden=!show;
     });
@@ -318,8 +339,17 @@ document.querySelectorAll('.filter-wrap').forEach(function(w){
     w.querySelectorAll('.chip[data-league]').forEach(function(c){
       c.setAttribute('aria-pressed',String(!off.has(c.dataset.league)));
     });
-    try{localStorage.setItem(KEY,JSON.stringify(Array.from(off)));}catch(e){}
+    if(w._key){try{localStorage.setItem(w._key,JSON.stringify(Array.from(off)));}catch(e){}}
+  });
+  if(bar){
+    bar.querySelectorAll('.chip[data-days]').forEach(function(c){
+      c.setAttribute('aria-pressed',String(c.dataset.days===days));
+    });
+    try{localStorage.setItem(DKEY,days);}catch(e){}
   }
+}
+wraps.forEach(function(w){
+  var off=w._off;
   w.querySelectorAll('.chip[data-league]').forEach(function(c){
     c.addEventListener('click',function(){
       var l=c.dataset.league; if(off.has(l)){off.delete(l);}else{off.add(l);} apply();
@@ -328,9 +358,30 @@ document.querySelectorAll('.filter-wrap').forEach(function(w){
   w.querySelectorAll('.chip-all').forEach(function(c){
     c.addEventListener('click',function(){off.clear();apply();});
   });
-  apply();
 });
+if(bar){
+  bar.querySelectorAll('.chip[data-days]').forEach(function(c){
+    c.addEventListener('click',function(){days=c.dataset.days;apply();});
+  });
+}
+apply();
 })();"""
+
+DAY_FILTERS = [("today", "Today"), ("tomorrow", "Tomorrow"), ("3", "Next 3 days"), ("5", "Next 5 days"),
+               ("all", "All")]
+
+
+def day_chips() -> str:
+    """Kick-off day filter for every filterable table on the page (hidden until the script runs).
+    'Next 3 days' is today plus the two days after it."""
+    chips = "".join(f'<button type="button" class="chip" data-days="{k}" aria-pressed="{str(k == "all").lower()}">'
+                    f'{label}</button>' for k, label in DAY_FILTERS)
+    return f'<div class="chips day-chips" role="group" aria-label="Filter by kick-off day" hidden>{chips}</div>'
+
+
+def _ko(fx) -> str:
+    """The data-ko attribute the day filter reads."""
+    return f' data-ko="{fx.kickoff.isoformat()}"'
 
 
 def with_filter_js(html_page: str) -> str:
@@ -510,19 +561,19 @@ def _all_predictions_body(allp, link) -> str:
         vals = ", ".join(f'{html.escape(k["market"].replace(" (value)", ""))} {html.escape(k["pick"])} '
                          f'@{k["price"]:.2f} <span class="hit">{k["edge"]:+.0%}</span>'
                          for k in p.picks if k.get("value")) or "–"
-        rows += (f'<tr data-league="{slug(lg)}"><td class="nw">{_local(p.fixture.kickoff)}</td>'
+        rows += (f'<tr data-league="{slug(lg)}"{_ko(p.fixture)}><td class="nw">{_local(p.fixture.kickoff)}</td>'
                  f'<td class="l">{html.escape(lg)}</td><td class="l">{link(lg, p.fixture)}</td>{cells}'
                  f'<td class="nw">{h}-{a_} <span class="mute">{pct(q)}</span></td><td>{vals}</td></tr>')
     return ('<div class="card"><div class="mute" style="margin-bottom:8px">The model\'s call in each market '
             'for every upcoming fixture, in kick-off order: the outcome it rates most likely, with its '
             'probability. Same layout as the settled games on the track record, which add the result. '
             'Click a match for the full analysis.</div>'
-            '<div class="filter-wrap" data-key="predictions">' + filter_chips(lg for lg, _ in allp)
+            '<div class="filter-wrap" data-key="predictions">' + day_chips() + filter_chips(lg for lg, _ in allp)
             + '<div class="scroll"><table class="filterable"><thead><tr><th>Kick-off</th><th class="l">League</th>'
             '<th class="l">Match</th><th>1X2</th><th>BTTS</th><th>GG2+</th><th>O/U 2.5</th>'
             '<th>Likeliest score</th><th>Value picks</th></tr></thead>'
             f'<tbody>{rows}</tbody></table></div>'
-            '<p class="mute filter-empty" hidden>No fixtures in the selected leagues.</p></div></div>')
+            '<p class="mute filter-empty" hidden>No fixtures for the selected days and leagues.</p></div></div>')
 
 
 def _values_body(values, link) -> str:
@@ -553,7 +604,7 @@ def _values_body(values, link) -> str:
 
 
 def _draws_table(ranked, link, limit: int | None = None, total: int | None = None) -> str:
-    """Draw-probability table with a league filter. ``limit`` rows are shown after filtering;
+    """Draw-probability table with a league filter (and the day filter where the page has one). ``limit`` rows are shown after filtering;
     ``total`` (on the "view more" page) is how many fixtures the shown top share came from."""
     rows = ""
     for i, (lg, p) in enumerate(ranked, 1):
@@ -563,7 +614,7 @@ def _draws_table(ranked, link, limit: int | None = None, total: int | None = Non
         call, cp = _model_pick(p, "1x2")
         hidden = " hidden" if limit and i > limit else ""   # without JavaScript: plain top N
         rows += (
-            f'<tr data-league="{slug(lg)}"{hidden}><td class="rk">{i}</td><td>{_local(fx.kickoff)}</td>'
+            f'<tr data-league="{slug(lg)}"{_ko(fx)}{hidden}><td class="rk">{i}</td><td>{_local(fx.kickoff)}</td>'
             f"<td>{html.escape(lg)}</td><td>{link(lg, fx)}</td><td><b>{pct(e['draw'])}</b></td>"
             f'<td class="nw"><b>{call}</b> <span class="mute">{pct(cp)}</span></td>'
             f"<td>{e['home'] * 100:.0f} / {e['away'] * 100:.0f}</td>"
@@ -582,7 +633,7 @@ def _draws_table(ranked, link, limit: int | None = None, total: int | None = Non
         '<th>1 / 2</th>'
         '<th>Exp. goals</th><th>Likeliest score</th><th>U2.5</th><th>Market draw</th><th>Fair</th></tr>'
         f'</thead><tbody>{rows}</tbody></table></div>'
-        '<p class="mute filter-empty" hidden>No fixtures in the selected leagues.</p></div>')
+        '<p class="mute filter-empty" hidden>No fixtures for the selected days and leagues.</p></div>')
 
 
 def html_report(preds_by_league: dict, path: Path, generated: datetime,
@@ -633,11 +684,15 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
     boards = []
     for title, fname, get in market_pages:
         items = sorted(((*get(p), lg, p) for lg, p in allp), key=lambda t: -t[0])
-        rows = "".join(f"<tr><td>{link(lg, p.fixture)}</td><td>{pick}</td><td>{pct(q)}</td><td>{1 / q:.2f}</td></tr>"
-                       for q, pick, _, lg, p in items[:10])
+        # every fixture, so the day filter can pick the top 10 of its days; plain top 10 without JS
+        rows = "".join(f'<tr{_ko(p.fixture)}{" hidden" if i > 10 else ""}><td>{link(lg, p.fixture)}</td>'
+                       f'<td>{pick}</td><td>{pct(q)}</td><td>{1 / q:.2f}</td></tr>'
+                       for i, (q, pick, _, lg, p) in enumerate(items, 1))
         k = more_count(len(items), 10)
-        boards.append(f'<div class="box"><h3>{title}</h3><table><tr><th>Match</th><th>Pick</th><th>Prob.</th>'
-                      f'<th>Fair</th></tr>{rows}</table>'
+        boards.append(f'<div class="box filter-wrap"><h3>{title}</h3><table class="filterable" data-limit="10">'
+                      f'<thead><tr><th>Match</th><th>Pick</th><th>Prob.</th><th>Fair</th></tr></thead>'
+                      f'<tbody>{rows}</tbody></table>'
+                      '<p class="mute filter-empty" hidden>No fixtures on the selected days.</p>'
                       f'<div style="margin-top:6px;text-align:right"><a href="{fname}">View more →</a>'
                       f'</div></div>')
         out = path.with_name(fname)
@@ -709,7 +764,7 @@ def html_report(preds_by_league: dict, path: Path, generated: datetime,
         tiles += (f'<div class="box tile idle"><h3>{html.escape(league)}</h3>'
                   f'<div class="row"><b>No fixtures</b><span class="mute">in {window}</span></div>'
                   f'<div class="row mute"><span>{when}</span></div></div>')
-    leagues_card = (f'<div class="card"><h2>Leagues</h2><div class="grid">{tiles}</div>'
+    leagues_card = (day_chips() + f'<div class="card"><h2>Leagues</h2><div class="grid">{tiles}</div>'
                     f'<div class="row" style="margin-top:12px"><span class="mute">{len(values)} VALUE '
                     f'pick{"s" if len(values) != 1 else ""} across all leagues</span>'
                     f'<span><a href="{ODDS_FILE}">Enter odds</a> · '
