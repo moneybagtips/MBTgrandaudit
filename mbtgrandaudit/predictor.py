@@ -34,6 +34,7 @@ class Prediction:
     model_only: dict = field(default_factory=dict)    # ensemble markets without the market view
     model_matrices: dict = field(default_factory=dict)
     features: dict = field(default_factory=dict)      # inputs frozen at prediction time
+    variant: "Prediction | None" = None               # same fixture, market view fed Pinnacle's prices
 
 
 _DIV_NAMES = {lg.fd_code: lg.name for lg in LEAGUES.values()} | {

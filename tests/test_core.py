@@ -171,3 +171,167 @@ def test_market_view_uses_entered_prices():
     assert abs(high["home"] - plain["home"]) < 0.02           # 1X2 still matched
     both = implied_markets(base, extra={"btts_yes": 1.55, "btts_no": 2.35, "over_3.5": 2.6, "under_3.5": 1.45})
     assert {"BTTS", "O/U 3.5"} <= set(both["info"]["matched"])
+
+
+def _apif_fixture(fid, date, home, away):
+    return {"fixture": {"id": fid, "date": date}, "teams": {"home": {"name": home}, "away": {"name": away}}}
+
+
+def test_apifootball_parse_and_match():
+    from mbtgrandaudit.data.apifootball import match_fixtures, parse_odds
+    resp = [{"bookmakers": [
+        {"name": "Bet365", "bets": [
+            {"name": "Match Winner", "values": [{"value": "Home", "odd": "1.50"}, {"value": "Draw", "odd": "4.00"},
+                                                {"value": "Away", "odd": "6.00"}]},
+            {"name": "Goals Over/Under", "values": [{"value": "Over 1.5", "odd": "1.20"},
+                                                    {"value": "Under 1.5", "odd": "4.50"},
+                                                    {"value": "Over 2.25", "odd": "1.60"},    # Asian line: ignored
+                                                    {"value": "Over 5.5", "odd": "9.00"}]},   # beyond 4.5: ignored
+            {"name": "Both Teams Score", "values": [{"value": "Yes", "odd": "1.80"}, {"value": "No", "odd": "1.95"}]},
+            {"name": "Exact Score", "values": [{"value": "1:0", "odd": "7.00"}]}]},
+        {"name": "Pinnacle", "bets": [
+            {"name": "Match Winner", "values": [{"value": "Home", "odd": "1.55"}, {"value": "Draw", "odd": "bad"}]}]}]}]
+    got = parse_odds(resp)
+    assert ("Bet365", "over_1.5", 1.2) in got and ("Bet365", "btts_no", 1.95) in got
+    assert ("Pinnacle", "home", 1.55) in got
+    assert {k for _, k, _ in got} == {"home", "draw", "away", "over_1.5", "under_1.5", "btts_yes", "btts_no"}
+    ours = pd.DataFrame([
+        {"event_id": "1", "home": "Wolverhampton Wanderers", "away": "Portsmouth", "kickoff": "2026-10-20T19:00:00+00:00"},
+        {"event_id": "2", "home": "Manchester United", "away": "Leeds United", "kickoff": "2026-10-21T19:00:00+00:00"},
+        {"event_id": "3", "home": "Celtic", "away": "Rangers", "kickoff": "2026-10-21T12:00:00+00:00"}])
+    api = [_apif_fixture(11, "2026-10-20T19:00:00+00:00", "Wolves", "Portsmouth"),
+           _apif_fixture(12, "2026-10-21T19:00:00+00:00", "Manchester United", "Leeds"),
+           _apif_fixture(13, "2026-10-21T19:00:00+00:00", "Manchester City", "Leeds"),
+           _apif_fixture(14, "2026-10-22T12:00:00+00:00", "Celtic", "Rangers")]   # a day off: no match
+    assert match_fixtures(ours, api) == {"1": 11, "2": 12}
+
+
+def test_apifootball_fetch_stores_and_skips(tmp_path):
+    from datetime import datetime, timezone
+    from mbtgrandaudit.data.apifootball import Client, fetch
+    from mbtgrandaudit.storage import Store
+    m = poisson_matrix(1.5, 1.2)
+    st = Store(tmp_path / "t.db")
+    for ev, home, away in (("101", "Arsenal", "Chelsea"), ("102", "Everton", "Fulham")):
+        st.add_prediction(event_id=ev, league="EPL", home=home, away=away, model_home=home, model_away=away,
+                          kickoff=pd.Timestamp("2026-10-21 15:00", tz="UTC"), predicted_at=pd.Timestamp("2026-10-20"),
+                          version="v1", source="live", matrix=m, markets=markets(m), weights={}, features={},
+                          model_matrices={})
+    odds = {"bookmakers": [{"name": "Bet365", "bets": [
+        {"name": "Both Teams Score", "values": [{"value": "Yes", "odd": "1.70"}, {"value": "No", "odd": "2.10"}]}]}]}
+    calls = []
+
+    class Fake:
+        def __init__(self, path):
+            calls.append(path)
+            body = ([_apif_fixture(1, "2026-10-21T15:00:00+00:00", "Arsenal", "Chelsea"),
+                     _apif_fixture(2, "2026-10-21T15:00:00+00:00", "Everton", "Fulham")]
+                    if path.startswith("fixtures") else [odds])
+            self.data, self.headers = {"errors": [], "response": body}, {"x-ratelimit-requests-remaining": "50"}
+
+        def __enter__(self):
+            import io, json
+            r = io.StringIO(json.dumps(self.data))
+            r.headers = self.headers
+            return r
+
+        def __exit__(self, *a):
+            return False
+
+    client = Client("k", budget=10, min_interval=0, opener=lambda req, timeout: Fake(req.full_url.split(".io/")[1]))
+    now = datetime(2026, 10, 20, 7, tzinfo=timezone.utc)
+    s = fetch(st, datetime(2026, 10, 21, tzinfo=timezone.utc), now, client, log=lambda *_: None)
+    assert s["matched"] == 2 and s["rows"] == 4 and client.used == 3 and client.remaining == 50
+    mo = st.market_odds_for(["101", "102"])
+    assert len(mo) == 4 and set(mo["kind"]) == {"prediction"} and set(mo["bookmaker"]) == {"Bet365"}
+    s = fetch(st, datetime(2026, 10, 21, tzinfo=timezone.utc), now, client, log=lambda *_: None)
+    assert s["skipped"] == 2 and s["fetched"] == 0 and client.used == 4      # only the fixtures call
+    tight = Client("k", budget=2, min_interval=0, opener=lambda req, timeout: Fake(req.full_url.split(".io/")[1]))
+    later = datetime(2026, 10, 20, 21, tzinfo=timezone.utc)                    # past the 12h skip window
+    s = fetch(st, datetime(2026, 10, 21, tzinfo=timezone.utc), later, tight, log=lambda *_: None)
+    assert s["fetched"] == 1 and tight.used == 2                               # budget stops the run
+    st.close()
+
+
+def test_entered_odds_ignores_fetched_feed(tmp_path):
+    from mbtgrandaudit.cli import _entered_odds
+    from mbtgrandaudit.storage import Store
+    st = Store(tmp_path / "t.db")
+    st.add_market_odds("101", "gg2_yes", 6.5, pd.Timestamp("2026-10-20 08:00", tz="UTC"), "manual", "Book")
+    st.add_market_odds_many([("101", "gg2_yes", 9.0, pd.Timestamp("2026-10-20 09:00", tz="UTC"), "prediction", "Bet365"),
+                             ("101", "btts_yes", 1.7, pd.Timestamp("2026-10-20 09:00", tz="UTC"), "prediction", "Bet365")])
+    st.add_market_odds("101", "gg2_no", 1.05, pd.Timestamp("2026-10-20 10:00", tz="UTC"), "closing", "Book")
+    st.commit()
+    assert _entered_odds(["101"], st) == {"101": {"gg2_yes": 6.5}}
+    st.close()
+
+
+def test_pinnacle_variant_inputs_and_differences():
+    from mbtgrandaudit.data.apifootball import differences, variant_inputs
+    espn = {"H": 2.0, "D": 3.4, "A": 3.9, "line": 3.5, "over": 2.4, "under": 1.6, "source": "DraftKings"}
+    book = {"home": 1.9, "draw": 3.6, "away": 4.2, "over_2.5": 1.8, "under_2.5": 2.05, "over_1.5": 1.25,
+            "btts_yes": 1.7, "btts_no": 2.1}
+    odds, extra = variant_inputs(book, espn, {"gg2_yes": 6.5})
+    assert odds == {"H": 1.9, "D": 3.6, "A": 4.2, "source": "Pinnacle", "line": 2.5, "over": 1.8, "under": 2.05}
+    assert extra == {"gg2_yes": 6.5, "over_1.5": 1.25, "btts_yes": 1.7, "btts_no": 2.1}
+    odds, extra = variant_inputs({"btts_yes": 1.7}, espn, None)     # no Pinnacle 1X2: keep ESPN's
+    assert odds == espn and extra == {"btts_yes": 1.7}
+    assert variant_inputs({}, espn, None) is None and variant_inputs({"btts_yes": 1.7}, None, None) is None
+    main = markets(poisson_matrix(1.4, 1.3))
+    other = markets(poisson_matrix(1.1, 1.6))
+    d = differences(main, other)
+    assert d["pick_changed"] and d["main_pick"] == "home" and d["variant_pick"] == "away"
+    assert "1" in {label for label, _, _ in d["moved"]}
+    assert differences(main, main) == {"pick_changed": False, "main_pick": "home", "variant_pick": "home", "moved": []}
+
+
+def test_variant_logged_apart_from_main(tmp_path):
+    from types import SimpleNamespace
+    from mbtgrandaudit.cli import _add_variants
+    from mbtgrandaudit.storage import Store
+    m = poisson_matrix(1.5, 1.2)
+
+    def make(f, extra=None):
+        return SimpleNamespace(fixture=f, home="A", away="B", matrix=m, ensemble=markets(m), weights={},
+                               features={"extra": extra}, model_matrices={}, variant=None)
+
+    from mbtgrandaudit.data.espn import Fixture
+    fx = Fixture("101", pd.Timestamp("2099-01-01 15:00", tz="UTC"), "EPL", "A", "B")
+    fx.odds = {"H": 2.0, "D": 3.4, "A": 3.9}
+    main = make(fx)
+    _add_variants(SimpleNamespace(predict=make), [main], {"101": {"gg2_yes": 6.5}},
+                  book_odds={"101": {"home": 1.9, "draw": 3.6, "away": 4.2, "btts_yes": 1.7}})
+    assert main.variant.fixture.odds["source"] == "Pinnacle" and main.fixture.odds["H"] == 2.0
+    assert main.variant.features["extra"] == {"gg2_yes": 6.5, "btts_yes": 1.7}
+    st = Store(tmp_path / "t.db")
+    st.add_live(main, "EPL", "v1", pd.Timestamp("2026-10-20", tz="UTC"))
+    st.add_live(main.variant, "EPL", "v1", pd.Timestamp("2026-10-20", tz="UTC"), source="live-pinnacle")
+    st.add_result("101", "EPL", 1, 0, "test")
+    st.commit()
+    assert len(st.settled(source="live")) == 1 and len(st.settled(source="live-pinnacle")) == 1
+    assert len(st.odds_for(["101"])) == 1            # only the main prediction stores an odds snapshot
+    st.close()
+
+
+def test_feed_tainted_live_predictions_excluded(tmp_path):
+    from mbtgrandaudit.evaluate import FEED_FLAG, load
+    from mbtgrandaudit.storage import Store
+    m = poisson_matrix(1.5, 1.2)
+    st = Store(tmp_path / "t.db")
+    fetched = pd.Timestamp("2026-10-20 12:15", tz="UTC")
+    for ev, predicted, feats, source in (
+            ("1", "2026-10-21 06:31", {}, "live"),                    # old code, after the fetch: tainted
+            ("2", "2026-10-21 06:31", {FEED_FLAG: 1.0}, "live"),      # feed kept out: kept
+            ("3", "2026-10-20 06:00", {}, "live"),                    # made before the fetch: kept
+            ("1", "2026-10-21 06:31", {}, "live-pinnacle")):          # the variant is meant to use it
+        st.add_prediction(event_id=ev, league="EPL", home="A", away="B", model_home="A", model_away="B",
+                          kickoff=pd.Timestamp("2026-10-21 18:00", tz="UTC"), predicted_at=pd.Timestamp(predicted, tz="UTC"),
+                          version="v1", source=source, matrix=m, markets=markets(m), weights={}, features=feats,
+                          model_matrices={})
+        st.add_market_odds(ev, "btts_yes", 1.7, fetched, "prediction", "Pinnacle")
+        st.add_result(ev, "EPL", 1, 1, "test")
+    st.add_market_odds("2", "gg2_yes", 6.5, fetched, "manual", "Book")
+    st.commit()
+    assert sorted(load(st, source="live")[0]["event_id"]) == ["2", "3"]
+    assert list(load(st, source="live-pinnacle")[0]["event_id"]) == ["1"]
+    st.close()
