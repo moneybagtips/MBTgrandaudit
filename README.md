@@ -259,6 +259,31 @@ Everton,Chelsea,gg2,6.50,Bet365
 Brentford,Liverpool,ng2,1.12,Bet365
 ```
 
+### 4. From bookmaker screenshots (terminal)
+
+```bash
+export ANTHROPIC_API_KEY=...        # a Claude API key
+python -m mbtgrandaudit odds from-image shot1.png shot2.png --lines prices.txt
+python -m mbtgrandaudit odds from-issue prices.txt
+```
+
+Take screenshots of a market tab on the bookmaker's site (built for SportyBet's list view,
+e.g. the GG/NG 2+ tab) and pass them in. A vision model reads each image. The tool then:
+
+* takes the market from the **selected tab** only, never from the column headers (a GG/NG 2+
+  tab and a GG/NG tab both show GG and NG columns). An unclear tab, a tab whose columns don't
+  fit, an Over/Under screen with no line, or an unsupported market (half-time, double chance …)
+  gives no prices for that screenshot;
+* dates rows from the date separators. Rows above the first separator take the previous
+  screenshot's date, or are matched on teams alone;
+* matches each row to a logged upcoming fixture, and skips prices at or below 1.00, two-sided
+  pairs with an implausible margin (likely misreads), and games that have kicked off.
+
+It prints a review table with the model's edge and **saves nothing**. `--lines` writes the
+proposed prices in the odds-form issue format (bookmaker SportyBet unless the screenshot or
+`--bookmaker` says otherwise), so check them, fix any line, then import with `odds from-issue`.
+Set `MBT_VISION_MODEL` to use a different Claude model.
+
 Check what's stored with `python -m mbtgrandaudit odds list`.
 
 **Market codes:**
