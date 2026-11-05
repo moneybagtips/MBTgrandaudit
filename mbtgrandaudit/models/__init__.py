@@ -26,18 +26,22 @@ def build_models(settings) -> list[Model]:
     ]
 
 
-def load_weights(settings, league_key: str | None = None) -> dict:
-    """Backtest-tuned weights (per league if available), else the defaults."""
+def load_weights(settings, league_key: str | None = None, default: dict | None = None) -> dict:
+    """Backtest-tuned weights (per league if available), else the defaults.
+
+    ``default``: the fallback for a different model set (the cup predictor); the file's
+    shared "default" entry is skipped then, since it names the league models."""
     if WEIGHTS_FILE.exists():
         try:
             saved = json.loads(WEIGHTS_FILE.read_text())
             w = saved.get(league_key) if league_key else None
-            w = w or saved.get("default")
+            if default is None:
+                w = w or saved.get("default")
             if w:
-                return _with_market(w, settings)
+                return _with_market(w, settings) if default is None else dict(w)
         except json.JSONDecodeError:
             pass
-    return dict(settings.default_weights)
+    return dict(settings.default_weights if default is None else default)
 
 
 def _with_market(w: dict, settings) -> dict:
