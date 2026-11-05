@@ -37,8 +37,8 @@ class Prediction:
     variant: "Prediction | None" = None               # same fixture, market view fed Pinnacle's prices
 
 
-_DIV_NAMES = {lg.fd_code: lg.name for lg in LEAGUES.values()} | {
-    "E2": "English League One", "SP2": "Spanish Segunda", "D2": "German 2. Bundesliga",
+_DIV_NAMES = {lg.fd_code: lg.name for lg in LEAGUES.values() if lg.fd_code} | {
+    "EURO": "UEFA club competitions", "E2": "English League One", "SP2": "Spanish Segunda", "D2": "German 2. Bundesliga",
     "I2": "Italian Serie B", "F2": "French Ligue 2", "SC1": "Scottish Championship"}
 
 
@@ -165,6 +165,22 @@ class LeaguePredictor:
     def resolve(self, name: str) -> str | None:
         return match_team(name, self.candidates) or match_team(name, self.all_teams)
 
+    prior_model = "dixon_coles"   # supplies the expected-goals prior the h2h model shrinks toward
+
+    def _teams(self, fx: espn.Fixture) -> tuple[str, str, list[str]]:
+        """Model names for the fixture's teams, and any warnings."""
+        warnings = []
+        home, away = self.resolve(fx.home), self.resolve(fx.away)
+        if home is None or away is None:
+            missing = fx.home if home is None else fx.away
+            warnings.append(f"No history found for '{missing}' - using newcomer prior. "
+                            f"Add it to team_aliases.json if it is a naming mismatch.")
+            home, away = home or fx.home, away or fx.away
+        return home, away, warnings
+
+    def _features(self, ctx: MatchContext) -> dict:
+        return extract_features(self.models, ctx)
+
     # ------------------------------------------------------------ team context
     def _espn_matches(self, team_id: str | None) -> pd.DataFrame:
         if not team_id or str(team_id).startswith("fd-"):
@@ -211,17 +227,12 @@ class LeaguePredictor:
         """extra_odds: {market key: decimal odds} for markets ESPN doesn't quote (e.g. gg2_yes)."""
         if not self.prepared:
             self.prepare()
-        warnings = []
-        home, away = self.resolve(fx.home), self.resolve(fx.away)
-        if home is None or away is None:
-            missing = fx.home if home is None else fx.away
-            warnings.append(f"No history found for '{missing}' - using newcomer prior. "
-                            f"Add it to team_aliases.json if it is a naming mismatch.")
-            home, away = home or fx.home, away or fx.away
+        home, away, warnings = self._teams(fx)
         ctx, analysis = self.context(fx, home, away)
+        ctx.neutral = bool(getattr(fx, "neutral", False))
 
         mats, per_model = {}, {}
-        dc = next(m for m in self.models if m.name == "dixon_coles")
+        dc = next(m for m in self.models if m.name == self.prior_model)
         ctx.prior = dc.expected_goals(ctx)
         for m in self.models:
             try:
@@ -245,7 +256,7 @@ class LeaguePredictor:
 
         pred = Prediction(fx, home, away, ens, per_model, used, analysis, warnings=warnings,
                           matrix=ens_matrix, model_matrices=mats,
-                          features=extract_features(self.models, ctx))
+                          features=self._features(ctx))
         pred.model_only = model_only
         pred.market = self._market(fx.odds, ens, extra_odds or {})
         pred.picks = self._picks(ens, per_model, pred.market, model_only)
