@@ -23,6 +23,7 @@ class MatchContext:
     league_home_goals: float = 1.5
     league_away_goals: float = 1.2
     prior: tuple[float, float] | None = None  # (lambda_home, lambda_away) from the main strength model
+    neutral: bool = False                     # neutral venue (e.g. a cup final)
 
 
 class Model:

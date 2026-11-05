@@ -6,6 +6,9 @@
     python -m mbtgrandaudit match EPL "Arsenal" "Chelsea"
     python -m mbtgrandaudit ratings --league EPL
     python -m mbtgrandaudit backtest --league EPL --seasons 2 --save-weights
+    python -m mbtgrandaudit predict --league UCL UEL        # UEFA cups (cross-league model)
+    python -m mbtgrandaudit ratings --league UCL            # clubs on the cross-league scale
+    python -m mbtgrandaudit backtest --league UCL UEL --seasons 2
 
 Prediction log (SQLite, data/predictions.db):
     python -m mbtgrandaudit predict --log            # store predictions
@@ -31,7 +34,8 @@ from pathlib import Path
 import pandas as pd
 
 from . import backtest, evaluate, report, shortlist
-from .config import LEAGUES, MAJOR, Settings, market_group
+from . import cup
+from .config import CUPS, LEAGUES, MAJOR, Settings, market_group
 from .data import apifootball, espn, footballdata as fd
 from .data.espn import Fixture
 from .predictor import LeaguePredictor
@@ -51,6 +55,12 @@ def _leagues(arg: list[str] | None) -> list[str]:
     return keys
 
 
+def _predictor(key: str, settings: Settings | None = None, **kw) -> LeaguePredictor:
+    """The league predictor, or the cross-league one for a UEFA competition."""
+    cls = cup.CupPredictor if LEAGUES[key].cup else LeaguePredictor
+    return cls(key, settings, **kw)
+
+
 def _settings(a) -> Settings:
     s = Settings()
     if getattr(a, "train_seasons", None):
@@ -59,15 +69,17 @@ def _settings(a) -> Settings:
 
 
 def cmd_leagues(a):
-    print(f"{'key':10s}{'league':30s}{'football-data':>15s}{'ESPN':>10s}  second tier")
+    print(f"{'key':10s}{'league':30s}{'football-data':>15s}{'ESPN':>16s}  second tier")
     for lg in LEAGUES.values():
-        print(f"{lg.key:10s}{lg.name:30s}{lg.fd_code:>15s}{lg.espn_code:>10s}  {lg.lower_fd_code or '-'}")
-    print(f"\nDefault (no --league): {' '.join(MAJOR)}.  Use --league all for every league.")
+        print(f"{lg.key:10s}{lg.name:30s}{lg.fd_code or '-':>15s}{lg.espn_code:>16s}  "
+              f"{'(cross-league model)' if lg.cup else lg.lower_fd_code or '-'}")
+    print(f"\nDefault (no --league): {' '.join(MAJOR)}.  Use --league all for every league "
+          f"(the UEFA cups {' '.join(CUPS)} included).")
 
 
 def cmd_fixtures(a):
     for key in _leagues(a.league):
-        p = LeaguePredictor(key, offline=a.offline, log=lambda *_: None)
+        p = _predictor(key, offline=a.offline, log=lambda *_: None)
         fx = p.fixtures(a.days)
         print(f"\n{LEAGUES[key].name} - next {a.days} days: {len(fx)} fixtures")
         for f in fx:
@@ -79,7 +91,7 @@ def cmd_predict(a):
     by_league, records = {}, []
     idle = {}   # league name -> next kick-off beyond the window (None if none found)
     for key in _leagues(a.league):
-        p = LeaguePredictor(key, s, offline=a.offline)
+        p = _predictor(key, s, offline=a.offline)
         fx = p.fixtures(a.days)
         if a.team:
             needle = a.team.lower()
@@ -310,6 +322,9 @@ def cmd_backfill(a):
     s = _settings(a)
     store = Store()
     for key in _leagues(a.league):
+        if LEAGUES[key].cup:
+            print(f"[{key}] skipped: no backfill for the UEFA cups (ESPN keeps no past odds for them)")
+            continue
         res = backtest.run(key, a.seasons, s, offline=a.offline, store=store)
         print(f"[{key}] stored {len(res['rows'])} backtest predictions")
     print("log now holds:", store.counts())
@@ -554,7 +569,7 @@ LOOKAHEAD_DAYS = 45   # how far to look for an idle league's next fixture
 def cmd_match(a):
     s = _settings(a)
     key = _leagues([a.league])[0]
-    p = LeaguePredictor(key, s, offline=a.offline).prepare()
+    p = _predictor(key, s, offline=a.offline).prepare()
     # use the real fixture (ESPN ids give all-competition form) if it is scheduled soon
     fx = next((f for f in p.fixtures(21) if p.resolve(f.home) == p.resolve(a.home)
                and p.resolve(f.away) == p.resolve(a.away)), None)
@@ -568,6 +583,16 @@ def cmd_match(a):
 
 def cmd_ratings(a):
     key = _leagues(a.league)[0]
+    if LEAGUES[key].cup:
+        p = cup.CupPredictor(key, _settings(a), offline=a.offline).prepare()
+        elo = next(m for m in p.models if m.name == "cross_elo")
+        pd.set_option("display.width", 200)
+        print(f"\n{LEAGUES[key].name} - this season's clubs on the cross-league scale (Elo = league "
+              f"offset + team; dc_strength = attack - defence, in log goals)\n")
+        print(p.ratings_table().round(3).to_string())
+        print("\nLeague offsets (Elo points, moved by European results only):")
+        print(elo.league_offsets().round(0).to_string())
+        return
     p = LeaguePredictor(key, _settings(a), offline=a.offline).prepare()
     dc = next(m for m in p.models if m.name == "dixon_coles")
     elo = next(m for m in p.models if m.name == "elo")
@@ -582,7 +607,11 @@ def cmd_ratings(a):
 
 def cmd_backtest(a):
     s = _settings(a)
-    for key in _leagues(a.league):
+    keys = _leagues(a.league)
+    cups = [k for k in keys if LEAGUES[k].cup]
+    if cups:
+        _backtest_cups(cups, a, s)
+    for key in [k for k in keys if not LEAGUES[k].cup]:
         res = backtest.run(key, a.seasons, s, offline=a.offline)
         table = backtest.summarise(res)
         pd.set_option("display.width", 200)
@@ -593,6 +622,23 @@ def cmd_backtest(a):
         if a.save_weights:
             backtest.save_weights(key, w)
             print("saved to ensemble_weights.json - used automatically for", key)
+
+
+def _backtest_cups(keys, a, s):
+    """One walk-forward run over the cups together (they share the cross-league models)."""
+    res = cup.backtest(keys, max(a.seasons, 1), s, offline=a.offline)
+    pd.set_option("display.width", 200)
+    print(f"\n{' + '.join(LEAGUES[k].name for k in keys)} - lower log loss / RPS is better "
+          f"(no market view: ESPN keeps no odds for past European games)\n")
+    print(backtest.summarise(res).round(4).to_string())
+    print("\nEnsemble by clubs from leagues the tool doesn't model (0, 1 or 2 per game):")
+    print(cup.by_group(res).round(4).to_string())
+    w = cup.optimise_weights(res, s)
+    print("\nOptimised cup weights:", ", ".join(f"{k} {v:.2f}" for k, v in w.items()))
+    if a.save_weights:
+        for k in keys:
+            backtest.save_weights(k, w)
+        print("saved to ensemble_weights.json - used automatically for", ", ".join(keys))
 
 
 def _write_shortlist(path: Path, now, home: str, track_record: str | None = "track_record.html"):

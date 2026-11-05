@@ -62,7 +62,8 @@ class StrengthModel(Model):
             for t, s in first_season.items():
                 if s == cur_season:
                     prior_att[self.tidx[t]], prior_def[self.tidx[t]] = NEWCOMER_PRIOR
-        self.prior_att, self.prior_def = prior_att, prior_def
+        self.prior_att, self.prior_def = self._priors(h, prior_att, prior_def)
+        prior_att, prior_def = self.prior_att, self.prior_def
 
         avg = np.log(max(np.average((yh + ya) / 2, weights=w), 0.1))
         x0 = np.concatenate([np.full(D, avg), [0.25], prior_att, prior_def, self._extra_x0()])
@@ -79,6 +80,10 @@ class StrengthModel(Model):
         self.fitted = True
         self._post_fit(h)
         return self
+
+    def _priors(self, h: pd.DataFrame, prior_att: np.ndarray, prior_def: np.ndarray):
+        """Hook: ridge centres for each team's (attack, defence); default as given."""
+        return prior_att, prior_def
 
     def _extra_x0(self):
         return []

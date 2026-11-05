@@ -18,6 +18,7 @@ class League:
     espn_code: str           # ESPN league slug
     lower_fd_code: str | None = None  # second tier, used to rate promoted teams
     calendar: bool = False   # season runs within a calendar year (MLS, Nordic leagues)
+    cup: bool = False        # cross-league competition (no football-data division of its own)
 
 
 LEAGUES: dict[str, League] = {
@@ -42,8 +43,18 @@ LEAGUES: dict[str, League] = {
         League("NORWAY", "Norwegian Eliteserien", "NOR", "nor.1", calendar=True),
         # J1 moved to an August-May season from 2026-27 (earlier seasons were calendar years)
         League("JLEAGUE", "Japanese J1 League", "JPN", "jpn.1"),
+        # UEFA club competitions: predicted by the cross-league model (cup.py), which rates
+        # every domestic league above on one scale through European results
+        League("UCL", "UEFA Champions League", "", "uefa.champions", cup=True),
+        League("UEL", "UEFA Europa League", "", "uefa.europa", cup=True),
     ]
 }
+
+DOMESTIC = [k for k, lg in LEAGUES.items() if not lg.cup]
+CUPS = [k for k, lg in LEAGUES.items() if lg.cup]
+# European competitions whose results tie the domestic leagues together (the Conference
+# League is used for ratings only: it links the smaller leagues)
+EURO_SLUGS = ["uefa.champions", "uefa.europa", "uefa.europa.conf"]
 
 MAJOR = ["EPL", "LALIGA", "BUNDES", "SERIEA", "LIGUE1"]
 
@@ -77,6 +88,16 @@ class Settings:
         "h2h": 0.05,
         # market view (solved from the game's 1X2 + O/U odds). Used only when the game
         # has odds; 1.2 against the models' 1.0 = 55% of the blend. Tuned by backtest.
+        "market_view": 1.2,
+    })
+    # cup fixtures (cross-league model): the market leads (71% when the game has odds),
+    # the two cross-league ratings share most of the rest. Ratios from the walk-forward
+    # backtest on 2024-25 + 2025-26 UCL/UEL (README, "UEFA cups").
+    cup_weights: dict = field(default_factory=lambda: {
+        "cross_dc": 0.20,
+        "cross_elo": 0.20,
+        "form": 0.05,
+        "h2h": 0.03,
         "market_view": 1.2,
     })
 

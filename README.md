@@ -24,6 +24,7 @@ python -m mbtgrandaudit predict                      # top-5 leagues, next 7 day
 python -m mbtgrandaudit predict -l EPL -d 3 --detail # one league, per-model breakdown
 python -m mbtgrandaudit predict -l all --html reports/week.html --open
 python -m mbtgrandaudit match EPL "Arsenal" "Chelsea"
+python -m mbtgrandaudit predict -l UCL UEL           # Champions League + Europa League
 python -m mbtgrandaudit fixtures -l SERIEA -d 10
 python -m mbtgrandaudit ratings -l BUNDES
 python -m mbtgrandaudit backtest -l EPL --seasons 2 --save-weights
@@ -53,6 +54,73 @@ The last five come from football-data.co.uk's "extra leagues" files, which diffe
   closing odds and results all come from football-data. It publishes fixtures only a few
   days ahead, so Swiss games appear in the predictions close to each matchday, and
   without all-competition form.
+
+Plus two UEFA club competitions, the Champions League (`UCL`) and Europa League (`UEL`),
+which use a cross-league model of their own (below).
+
+## UEFA cups (Champions League, Europa League)
+
+`UCL` and `UEL` are competitions like the leagues: `predict -l UCL UEL`, and `-l all`
+(the daily Predict run) includes them. They get their own pages on the site, are logged
+under their own keys (so the track record keeps them apart), and are settled, priced at
+closing and fetched from API-Football through ESPN's `uefa.champions` / `uefa.europa`
+scoreboards, like any ESPN league.
+
+The league models can't price them: each league is fitted on its own, with its own
+intercept, so a rating only means something inside its league. The cups use a
+**cross-league model** instead (`mbtgrandaudit/cup.py`):
+
+* **Data.** Domestic results of every European league above (4 seasons, from
+  football-data.co.uk), plus every Champions, Europa and Conference League result
+  on ESPN (one scoreboard request per month). The domestic games rank clubs within each
+  league; the European games place the leagues against each other.
+* **Clubs.** An ESPN club is mapped to its football-data name through its ESPN domestic
+  league, with the usual name matching. ESPN files many smaller clubs under the UEFA
+  competition itself, so those only match by exact name or alias. A club from a covered
+  country with no domestic record (e.g. just promoted) joins that league as a newcomer.
+  Clubs from leagues the tool doesn't model (Austria, Czechia, Croatia ...) are rated
+  from their European games alone, shrunk toward their country's other clubs. When ESPN
+  doesn't say which country, they're shrunk toward all such clubs. Their predictions
+  carry a warning.
+* **`cross_dc`**: Dixon-Coles over all of it, with each team's ratings shrunk toward its
+  league's mean (two fits: the second uses the first fit's league means as priors).
+* **`cross_elo`**: rating = league offset + team rating. Domestic games move only team
+  ratings. European games also move the two leagues' offsets. Rating gaps in European
+  games are mapped to goal rates by Poisson regression.
+* **`form`** and **`h2h`** come from ESPN all-competition schedules, as in the leagues.
+  Form is measured against domestic opponents, so it gets a small weight.
+* **`market_view`** comes from the fixture's ESPN (DraftKings) odds when there are any,
+  and leads the blend as in the leagues. Weights: market view 71%, `cross_dc` and
+  `cross_elo` 12% each, form 3%, h2h 2% (`Settings.cup_weights`). Without odds, the
+  models share 100%.
+
+`python -m mbtgrandaudit ratings -l UCL` lists this season's clubs on the common scale,
+along with the league offsets.
+
+**Backtest.** `backtest -l UCL UEL --seasons 2` is a walk-forward test on the 2024-25 and
+2025-26 UCL + UEL seasons (756 games), refitted weekly. ESPN keeps no odds for past
+European games, so it tests the models without the market view. The benchmark is the
+base rates of the earlier seasons:
+
+| | 1X2 | BTTS | GG2+ | O/U 1.5 | O/U 2.5 | O/U 3.5 | RPS | 1X2 hit |
+|---|---|---|---|---|---|---|---|---|
+| `cross_dc` | 0.930 | 0.694 | 0.447 | 0.504 | 0.670 | 0.653 | 0.200 | 58.5% |
+| `cross_elo` | 0.937 | 0.691 | 0.444 | 0.500 | 0.670 | 0.653 | 0.202 | 56.9% |
+| `form` | 1.000 | 0.700 | 0.446 | 0.523 | 0.684 | 0.659 | 0.221 | 55.4% |
+| ensemble (no market) | 0.931 | 0.689 | 0.440 | 0.499 | 0.662 | 0.644 | 0.201 | 57.7% |
+| base rates | 1.024 | 0.690 | 0.440 | 0.503 | 0.680 | 0.662 | 0.234 | 50.4% |
+
+The ratings carry real 1X2 information: log loss 0.93 against 1.02 for base rates. On the
+goals markets the models barely beat base rates (BTTS, GG2+ at base-rate level). The
+tuned weights (0.12 / 0.12 / 0.03 beside a 73% market share) are what the defaults use.
+Games involving a club from an unmodelled league come out *better* (1X2 log loss 0.84
+vs 0.97), because those are mostly mismatches. On live fixtures with DraftKings odds,
+the models alone sit within about 9 points of the market's 1X2 and pick the same
+favourite in 82-86% of games.
+
+The Conference League is in the data (it links the smaller leagues) but isn't predicted.
+Adding it would be one `League(..., cup=True)` line in `config.py`, though Thursdays
+would then cost about 18 more API-Football requests.
 
 ## Data sources (free, no API key)
 
