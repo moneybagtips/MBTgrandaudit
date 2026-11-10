@@ -1,0 +1,15 @@
+{
+  "bookmaker": null,
+  "market_tab": "GG/NG 2+",
+  "market_tab_confidence": "high",
+  "columns": ["GG", "NG"],
+  "line": null,
+  "rows": [
+    {"date": "11/06", "weekday": "Friday", "time": "20:00", "bookie_id": "44024", "home": "Everton", "away": "Coventry City", "prices": [4.98, 1.14]},
+    {"date": "11/07", "weekday": "Saturday", "time": "12:30", "bookie_id": "11678", "home": "Leeds United", "away": "Tottenham", "prices": [5.21, 1.13]},
+    {"date": "11/07", "weekday": "Saturday", "time": "15:00", "bookie_id": "14381", "home": "Arsenal", "away": "Hull City", "prices": [7.78, 1.05]},
+    {"date": "11/07", "weekday": "Saturday", "time": "15:00", "bookie_id": "12914", "home": "Fulham", "away": "Newcastle", "prices": [4.17, 1.19]},
+    {"date": "11/07", "weekday": "Saturday", "time": "17:30", "bookie_id": "16798", "home": "Nottingham Forest", "away": "Man City", "prices": [4.50, 1.17]}
+  ],
+  "warnings": ["The Sunday, 11/08 separator is at the bottom edge with no rows visible"]
+}

@@ -516,6 +516,26 @@ def cmd_odds(a):
             for r in df.itertuples():
                 print(_add_one(store, r.home, r.away, r.market, float(r.odds),
                                getattr(r, "bookmaker", "") if "bookmaker" in df.columns else "", now))
+        elif a.action == "from-image":
+            from . import screenshot as shot
+            readings = []
+            for f in a.files:
+                try:
+                    readings.append(json.loads(Path(f).read_text(encoding="utf-8")) if f.endswith(".json")
+                                    else shot.read_image(Path(f)))
+                except ValueError as e:
+                    readings.append({"error": f"{Path(f).name}: {e}"})
+            events = shot.upcoming_events(store, now)
+            prop = shot.propose(readings, events, now, shot.predictions_for(store, events["event_id"]),
+                                default_bookmaker=a.bookmaker or "SportyBet")
+            md = shot.report(prop)
+            print(md)
+            if a.report:
+                Path(a.report).write_text(md, encoding="utf-8")
+            if a.lines:
+                Path(a.lines).write_text(
+                    f"Bookmaker: {prop.bookmaker}\n"
+                    + "".join(f"{ev} | {c} | {v:.2f} | {lb}\n" for ev, c, v, lb in prop.lines), encoding="utf-8")
         elif a.action == "from-issue":
             text = Path(a.file).read_text(encoding="utf-8") if a.file != "-" else sys.stdin.read()
             md, _ = _apply_issue(store, text, now)
@@ -765,6 +785,12 @@ def main(argv=None):
     q = osub.add_parser("from-issue", help="import prices from an odds-form GitHub issue body")
     q.add_argument("file", help="file holding the issue body ('-' for stdin)")
     q.add_argument("--report", help="write the Markdown reply to this file")
+    q = osub.add_parser("from-image", help="read prices from bookmaker market-list screenshots "
+                                           "(needs ANTHROPIC_API_KEY); proposes lines, saves nothing")
+    q.add_argument("files", nargs="+", help="screenshots (png/jpg), or .json model readings to replay")
+    q.add_argument("--bookmaker", help="bookmaker name if the screenshot doesn't show one (default SportyBet)")
+    q.add_argument("--report", help="write the Markdown review to this file")
+    q.add_argument("--lines", help="write the proposed lines to this file, ready for `odds from-issue`")
     q = osub.add_parser("list", help="show entered odds")
     q.add_argument("--days", type=int, default=1, help="include fixtures from this many days ago")
     p.set_defaults(fn=cmd_odds)
