@@ -1,6 +1,8 @@
 """Static configuration: supported leagues and model defaults."""
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -76,6 +78,12 @@ class Settings:
     # "edge" is more likely missing information (injuries, line-ups) than value:
     # the pick is flagged "check" instead of VALUE
     max_disagreement: float = 0.10
+    # hand-entered prices (odds form, screenshots) show edges and price the slips, but stay
+    # out of the market view, so the probabilities don't lean on the price being bet against.
+    # The market view is tuned on ESPN's 1X2 + O/U only. MBT_ENTERED_ODDS_IN_MODEL=1 restores
+    # the old behaviour (entered BTTS / GG2+ / O/U prices fitted into the market view too).
+    entered_odds_in_model: bool = field(
+        default_factory=lambda: os.environ.get("MBT_ENTERED_ODDS_IN_MODEL", "") == "1")
     default_weights: dict = field(default_factory=lambda: {
         "dixon_coles": 0.22,
         "poisson": 0.10,

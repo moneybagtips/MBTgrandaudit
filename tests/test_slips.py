@@ -101,3 +101,11 @@ def test_settle_counts_cuts(tmp_path):
     assert "| Lost |" in md
     md, done = sl.settle([s2], {"e0": (2, 2)}, stake)      # others still to play
     assert not done and "Still alive" in md
+
+
+def test_entered_odds_stay_out_of_the_model_by_default(monkeypatch):
+    from mbtgrandaudit.config import Settings
+    monkeypatch.delenv("MBT_ENTERED_ODDS_IN_MODEL", raising=False)
+    assert Settings().entered_odds_in_model is False
+    monkeypatch.setenv("MBT_ENTERED_ODDS_IN_MODEL", "1")
+    assert Settings().entered_odds_in_model is True
