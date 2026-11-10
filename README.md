@@ -284,6 +284,33 @@ proposed prices in the odds-form issue format (bookmaker SportyBet unless the sc
 `--bookmaker` says otherwise), so check them, fix any line, then import with `odds from-issue`.
 Set `MBT_VISION_MODEL` to use a different Claude model.
 
+### 5. Screenshots from your phone (GitHub Actions)
+
+Upload SportyBet GG/NG 2+ screenshots to `odds/inbox/` (GitHub app: Add file > Upload files).
+The **Slips** workflow reads them with the vision model, saves the prices, moves the images
+to `odds/processed/`, builds the GG2+ Flexibet slips (below) and opens a `Slips:` issue with
+the price review and the slips. Needs the `ANTHROPIC_API_KEY` repository secret.
+
+## GG2+ Flexibet slips
+
+```bash
+python -m mbtgrandaudit slips build --start 2026-11-21 --days 2 --md slips/wk.md --json slips/wk.json
+python -m mbtgrandaudit slips settle slips/wk.json
+```
+
+Built from fixtures that have a live prediction and entered GG2+ prices on both sides:
+
+* **aggressive**: 50 legs, 11 GG2+ Yes + 39 GG2+ No, Flexibet 2 cuts, the cut price aimed at the
+  GHS 1.5m cap on a GHS 10 stake;
+* **middle**: 7-9 Yes legs, 1-2 cuts, the cut price 15,000+ (`--min-cut`), the shape chosen to
+  maximise chance x capped payout.
+
+No legs are always the model's most confident GG2+ No picks. The Flexibet price is estimated as
+`c(n) * F / sum_{j<=k} e_j(odds - 1)`, with `c(n)` interpolated from real SportyBet slips
+(`C_POINTS` in `slips.py`; add a point when you have a new real slip). The **Settle results**
+workflow settles every saved `slips/*.json` once its games have results, writes
+`slips/*.results.md` and closes its `Slips:` issue with the outcome.
+
 Check what's stored with `python -m mbtgrandaudit odds list`.
 
 **Market codes:**
