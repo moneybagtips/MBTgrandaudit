@@ -1,0 +1,95 @@
+name: Slips
+
+# Upload SportyBet GG/NG 2+ screenshots to odds/inbox/ (the GitHub app works from a phone).
+# This reads them with the vision model, saves the prices, builds the aggressive and
+# middle-tier Flexibet slips for the next days into slips/, and opens a "Slips:" issue
+# with the price review and the slips. Run it by hand to rebuild from prices already saved.
+on:
+  push:
+    branches: [main]
+    paths: ["odds/inbox/**"]
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "First kick-off date YYYY-MM-DD (blank = now)"
+        default: ""
+      days:
+        description: Days to cover
+        default: "3"
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: slips
+  cancel-in-progress: false
+
+env:
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+
+      - name: Read and save the screenshots' prices
+        id: read
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          shopt -s nullglob nocaseglob
+          files=(odds/inbox/*.png odds/inbox/*.jpg odds/inbox/*.jpeg odds/inbox/*.webp)
+          echo "count=${#files[@]}" >> "$GITHUB_OUTPUT"
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No screenshots in odds/inbox; building from prices already saved." > review.md
+            exit 0
+          fi
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret is not set (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+          python -m mbtgrandaudit odds from-image "${files[@]}" --lines lines.txt --report review.md
+          if [ -s lines.txt ]; then
+            python -m mbtgrandaudit odds from-issue lines.txt --report import.md
+          fi
+          dest="odds/processed/$(date -u +%Y%m%d-%H%M)"
+          mkdir -p "$dest"
+          git mv "${files[@]}" "$dest/"
+
+      - name: Build the slips
+        id: build
+        run: |
+          stamp=$(date -u +%Y%m%d-%H%M)
+          echo "stamp=$stamp" >> "$GITHUB_OUTPUT"
+          start="${{ inputs.start }}"
+          python -m mbtgrandaudit slips build ${start:+--start "$start"} --days "${{ inputs.days || '3' }}" \
+            --title "GG2+ Flexibet slips ($stamp)" --md "slips/$stamp.md" --json "slips/$stamp.json"
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add -A odds slips
+          git diff --cached --quiet || { git commit -m "Slips ${{ steps.build.outputs.stamp }}"; git pull --rebase --quiet && git push; }
+
+      - name: Open the slips issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAMP: ${{ steps.build.outputs.stamp }}
+        run: |
+          {
+            echo "Slips page: ${{ github.server_url }}/${{ github.repository }}/blob/main/slips/$STAMP.md"
+            echo
+            echo "<details><summary>Prices read from the screenshots</summary>"
+            echo
+            cat review.md
+            echo
+            echo "</details>"
+            echo
+            head -c 55000 "slips/$STAMP.md"
+          } > issue.md
+          gh issue create --title "Slips: $STAMP" --body-file issue.md
