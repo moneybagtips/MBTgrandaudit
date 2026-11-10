@@ -244,7 +244,8 @@ class LeaguePredictor:
                 mats[m.name] = mat
                 per_model[m.name] = markets(mat, self.s.ou_lines)
         model_only = markets(ensemble(mats, self.weights), self.s.ou_lines)
-        implied = implied_matrix(fx.odds, self.s.max_goals, extra=extra_odds) if fx.odds else None
+        implied = implied_matrix(fx.odds, self.s.max_goals,
+                                 extra=extra_odds if self.s.entered_odds_in_model else None) if fx.odds else None
         if implied is not None:
             mats["market_view"] = implied[0]
             per_model["market_view"] = markets(implied[0], self.s.ou_lines)
