@@ -516,6 +516,26 @@ def cmd_odds(a):
             for r in df.itertuples():
                 print(_add_one(store, r.home, r.away, r.market, float(r.odds),
                                getattr(r, "bookmaker", "") if "bookmaker" in df.columns else "", now))
+        elif a.action == "from-image":
+            from . import screenshot as shot
+            readings = []
+            for f in a.files:
+                try:
+                    readings.append(json.loads(Path(f).read_text(encoding="utf-8")) if f.endswith(".json")
+                                    else shot.read_image(Path(f)))
+                except ValueError as e:
+                    readings.append({"error": f"{Path(f).name}: {e}"})
+            events = shot.upcoming_events(store, now)
+            prop = shot.propose(readings, events, now, shot.predictions_for(store, events["event_id"]),
+                                default_bookmaker=a.bookmaker or "SportyBet")
+            md = shot.report(prop)
+            print(md)
+            if a.report:
+                Path(a.report).write_text(md, encoding="utf-8")
+            if a.lines:
+                Path(a.lines).write_text(
+                    f"Bookmaker: {prop.bookmaker}\n"
+                    + "".join(f"{ev} | {c} | {v:.2f} | {lb}\n" for ev, c, v, lb in prop.lines), encoding="utf-8")
         elif a.action == "from-issue":
             text = Path(a.file).read_text(encoding="utf-8") if a.file != "-" else sys.stdin.read()
             md, _ = _apply_issue(store, text, now)
@@ -536,6 +556,50 @@ def cmd_odds(a):
         store.commit()
     except ValueError as e:
         sys.exit(str(e))
+    finally:
+        store.close()
+
+
+def cmd_slips(a):
+    """GG/NG 2+ Flexibet slips: build them from the log and entered odds, or settle saved ones."""
+    from . import slips as sl
+    store = Store()
+    now = datetime.now(timezone.utc)
+    try:
+        if a.action == "build":
+            start = pd.Timestamp(a.start, tz="UTC").to_pydatetime() if a.start else now
+            end = (pd.Timestamp(a.end, tz="UTC") + pd.Timedelta(days=1)).to_pydatetime() if a.end \
+                else start + timedelta(days=a.days)
+            df = sl.pool(store, start, end, now)
+            print(f"{len(df)} fixtures with a prediction and GG2+ prices on both sides")
+            built = []
+            if a.tier in ("aggressive", "both"):
+                built += sl.aggressive(df, a.slips, stake=a.stake)
+            if a.tier in ("middle", "both"):
+                built += sl.middle(df, a.slips, stake=a.stake, min_cut=a.min_cut)
+            title = a.title or f"GG2+ Flexibet slips, {start:%d %b} to {(end - timedelta(seconds=1)):%d %b}"
+            md = sl.to_markdown(built, a.stake, now, title)
+            if not built:
+                md += "\nNo slip could be built: too few fixtures with prices, or none reach the target odds.\n"
+            print(md)
+            if a.md:
+                Path(a.md).parent.mkdir(parents=True, exist_ok=True)
+                Path(a.md).write_text(md, encoding="utf-8")
+            if a.json and built:
+                sl.save(built, Path(a.json), a.stake, now)
+        elif a.action == "settle":
+            built, stake = sl.load(Path(a.file))
+            ids = sorted({l.event_id for s in built for l in s.legs})
+            res = store.query(f"SELECT event_id, home_goals, away_goals FROM results"
+                              f" WHERE event_id IN ({','.join('?' * len(ids))})", ids) if ids else pd.DataFrame()
+            results = {str(r.event_id): (int(r.home_goals), int(r.away_goals)) for r in res.itertuples()}
+            md, done = sl.settle(built, results, stake)
+            md = f"# Results: {Path(a.file).stem}\n\n" + ("" if done else "Some games are still to finish.\n\n") + md + "\n"
+            print(md)
+            if a.md:
+                Path(a.md).write_text(md, encoding="utf-8")
+            if a.done_flag and done:
+                Path(a.done_flag).write_text("done\n")
     finally:
         store.close()
 
@@ -765,9 +829,34 @@ def main(argv=None):
     q = osub.add_parser("from-issue", help="import prices from an odds-form GitHub issue body")
     q.add_argument("file", help="file holding the issue body ('-' for stdin)")
     q.add_argument("--report", help="write the Markdown reply to this file")
+    q = osub.add_parser("from-image", help="read prices from bookmaker market-list screenshots "
+                                           "(needs ANTHROPIC_API_KEY); proposes lines, saves nothing")
+    q.add_argument("files", nargs="+", help="screenshots (png/jpg), or .json model readings to replay")
+    q.add_argument("--bookmaker", help="bookmaker name if the screenshot doesn't show one (default SportyBet)")
+    q.add_argument("--report", help="write the Markdown review to this file")
+    q.add_argument("--lines", help="write the proposed lines to this file, ready for `odds from-issue`")
     q = osub.add_parser("list", help="show entered odds")
     q.add_argument("--days", type=int, default=1, help="include fixtures from this many days ago")
     p.set_defaults(fn=cmd_odds)
+
+    p = sub.add_parser("slips", help="GG/NG 2+ Flexibet accumulator slips: build or settle")
+    ssub = p.add_subparsers(dest="action", required=True)
+    q = ssub.add_parser("build", help="build aggressive and/or middle-tier slips from logged fixtures with GG2+ prices")
+    q.add_argument("--start", help="first kick-off date YYYY-MM-DD (default now)")
+    q.add_argument("--end", help="last kick-off date YYYY-MM-DD (default start + --days)")
+    q.add_argument("--days", type=int, default=3)
+    q.add_argument("--tier", choices=["aggressive", "middle", "both"], default="both")
+    q.add_argument("--slips", type=int, default=10, help="slips per tier")
+    q.add_argument("--stake", type=float, default=10.0)
+    q.add_argument("--min-cut", type=float, default=15000.0, help="middle tier: lowest acceptable cut price")
+    q.add_argument("--title")
+    q.add_argument("--md", help="write the slips page (Markdown) here")
+    q.add_argument("--json", help="save the slips here, for 'slips settle'")
+    q = ssub.add_parser("settle", help="settle saved slips against logged results")
+    q.add_argument("file", help="slips JSON written by 'slips build --json'")
+    q.add_argument("--md", help="write the results (Markdown) here")
+    q.add_argument("--done-flag", help="write this file when every leg has a result")
+    p.set_defaults(fn=cmd_slips)
 
     p = sub.add_parser("db", help="show what the prediction log holds, or migrate SQLite to Postgres")
     p.add_argument("--migrate-from", metavar="SQLITE_FILE",
