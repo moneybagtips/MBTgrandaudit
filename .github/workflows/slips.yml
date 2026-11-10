@@ -1,13 +1,20 @@
 name: Slips
 
-# Upload SportyBet GG/NG 2+ screenshots to odds/inbox/ (the GitHub app works from a phone).
-# This reads them with the vision model, saves the prices, builds the aggressive and
-# middle-tier Flexibet slips for the next days into slips/, and opens a "Slips:" issue
-# with the price review and the slips. Run it by hand to rebuild from prices already saved.
+# Two ways to send SportyBet GG/NG 2+ screenshots:
+#  * from a PC: upload them to odds/inbox/ (Add file > Upload files). The slips come back
+#    in a new "Slips:" issue;
+#  * from a phone: open an issue whose title contains "Screenshots:" and attach the images
+#    (the GitHub app can attach photos to an issue). The slips come back as a reply on it,
+#    and it is renamed "Slips: <stamp>" so the Settle workflow can post the results there.
+# Either way the prices are read with the vision model and saved, and the aggressive and
+# middle-tier Flexibet slips for the next days are built into slips/. Run it by hand to
+# rebuild from prices already saved.
 on:
   push:
     branches: [main]
-    paths: ["odds/inbox/**"]
+    paths: ["odds/inbox/**", "!odds/inbox/README.md"]
+  issues:
+    types: [opened, reopened]   # reopen a "Screenshots:" issue to read it again
   workflow_dispatch:
     inputs:
       start:
@@ -30,22 +37,62 @@ env:
 
 jobs:
   build:
+    # issues: only "Screenshots:" issues from people with write access (the repo is public)
+    if: >-
+      github.event_name != 'issues' || (
+      contains(github.event.issue.title, 'Screenshots:') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.issue.author_association))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
 
+      # the issue body goes through an environment variable, never into the script text
+      - name: Download the issue's images
+        if: github.event_name == 'issues'
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p issue_images
+          printf '%s' "$ISSUE_BODY" \
+            | grep -oE 'https://(github\.com/user-attachments/assets|user-images\.githubusercontent\.com|private-user-images\.githubusercontent\.com)/[^ )"<>]+' \
+            | awk '!seen[$0]++' > image_urls.txt || true
+          n=0
+          while read -r url; do
+            n=$((n + 1))
+            f="issue_images/$(printf '%02d' "$n")"
+            # curl drops the token if the image redirects to another host
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$url" -o "$f" || { echo "::warning::couldn't download $url"; continue; }
+            case "$(file -b --mime-type "$f")" in
+              image/png) mv "$f" "$f.png" ;;
+              image/jpeg) mv "$f" "$f.jpg" ;;
+              image/webp) mv "$f" "$f.webp" ;;
+              *) echo "::warning::$url is not an image"; rm -f "$f" ;;
+            esac
+          done < image_urls.txt
+          ls issue_images
+
       - name: Read and save the screenshots' prices
         id: read
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FROM_ISSUE: ${{ github.event_name == 'issues' }}
         run: |
           shopt -s nullglob nocaseglob
-          files=(odds/inbox/*.png odds/inbox/*.jpg odds/inbox/*.jpeg odds/inbox/*.webp)
+          if [ "$FROM_ISSUE" = "true" ]; then
+            files=(issue_images/*.png issue_images/*.jpg issue_images/*.webp)
+          else
+            files=(odds/inbox/*.png odds/inbox/*.jpg odds/inbox/*.jpeg odds/inbox/*.webp)
+          fi
           echo "count=${#files[@]}" >> "$GITHUB_OUTPUT"
           if [ ${#files[@]} -eq 0 ]; then
-            echo "No screenshots in odds/inbox; building from prices already saved." > review.md
+            if [ "$FROM_ISSUE" = "true" ] && [ -s image_urls.txt ]; then
+              echo "**The issue's images couldn't be downloaded**, so nothing new was read; building from prices already saved. Upload them to odds/inbox/ instead." > review.md
+            else
+              echo "No screenshots found; building from prices already saved." > review.md
+            fi
             exit 0
           fi
           if [ -z "$ANTHROPIC_API_KEY" ]; then
@@ -56,9 +103,11 @@ jobs:
           if [ -s lines.txt ]; then
             python -m mbtgrandaudit odds from-issue lines.txt --report import.md
           fi
-          dest="odds/processed/$(date -u +%Y%m%d-%H%M)"
-          mkdir -p "$dest"
-          git mv "${files[@]}" "$dest/"
+          if [ "$FROM_ISSUE" != "true" ]; then
+            dest="odds/processed/$(date -u +%Y%m%d-%H%M)"
+            mkdir -p "$dest"
+            git mv "${files[@]}" "$dest/"
+          fi
 
       - name: Build the slips
         id: build
@@ -76,11 +125,18 @@ jobs:
           git add -A odds slips
           git diff --cached --quiet || { git commit -m "Slips ${{ steps.build.outputs.stamp }}"; git pull --rebase --quiet && git push; }
 
-      - name: Open the slips issue
+      - name: Post the slips
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           STAMP: ${{ steps.build.outputs.stamp }}
+          NUMBER: ${{ github.event.issue.number }}
         run: |
+          if [ ! -s "slips/$STAMP.md" ]; then
+            msg="Building the slips failed; see the workflow log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            if [ -n "$NUMBER" ]; then gh issue comment "$NUMBER" --body "$msg"; fi
+            exit 1
+          fi
           {
             echo "Slips page: ${{ github.server_url }}/${{ github.repository }}/blob/main/slips/$STAMP.md"
             echo
@@ -92,4 +148,9 @@ jobs:
             echo
             head -c 55000 "slips/$STAMP.md"
           } > issue.md
-          gh issue create --title "Slips: $STAMP" --body-file issue.md
+          if [ -n "$NUMBER" ]; then
+            gh issue comment "$NUMBER" --body-file issue.md
+            gh issue edit "$NUMBER" --title "Slips: $STAMP"     # the Settle workflow posts the results here
+          else
+            gh issue create --title "Slips: $STAMP" --body-file issue.md
+          fi

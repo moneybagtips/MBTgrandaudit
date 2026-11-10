@@ -284,12 +284,17 @@ proposed prices in the odds-form issue format (bookmaker SportyBet unless the sc
 `--bookmaker` says otherwise), so check them, fix any line, then import with `odds from-issue`.
 Set `MBT_VISION_MODEL` to use a different Claude model.
 
-### 5. Screenshots from your phone (GitHub Actions)
+### 5. Screenshots through GitHub Actions
 
-Upload SportyBet GG/NG 2+ screenshots to `odds/inbox/` (GitHub app: Add file > Upload files).
-The **Slips** workflow reads them with the vision model, saves the prices, moves the images
-to `odds/processed/`, builds the GG2+ Flexibet slips (below) and opens a `Slips:` issue with
-the price review and the slips. Needs the `ANTHROPIC_API_KEY` repository secret.
+* **From a PC:** upload SportyBet GG/NG 2+ screenshots to `odds/inbox/` (Add file > Upload
+  files). The slips come back in a new `Slips:` issue, and the images move to `odds/processed/`.
+* **From a phone:** open an issue with "Screenshots:" in its title and attach the images (the
+  GitHub app can attach photos to an issue; it can't upload files to the repo). The slips come
+  back as a reply on that issue, which is renamed `Slips: <stamp>` so the results land there too.
+  Reopen the issue to read it again.
+
+Either way the **Slips** workflow reads the prices with the vision model, saves them and builds
+the GG2+ Flexibet slips (below). Needs the `ANTHROPIC_API_KEY` repository secret.
 
 ## GG2+ Flexibet slips
 
