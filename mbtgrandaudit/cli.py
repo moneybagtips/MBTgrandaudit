@@ -573,10 +573,12 @@ def cmd_slips(a):
             df = sl.pool(store, start, end, now)
             print(f"{len(df)} fixtures with a prediction and GG2+ prices on both sides")
             built = []
-            if a.tier in ("aggressive", "both"):
+            if a.tier in ("aggressive", "all", "both"):
                 built += sl.aggressive(df, a.slips, stake=a.stake)
-            if a.tier in ("middle", "both"):
+            if a.tier in ("middle", "all", "both"):
                 built += sl.middle(df, a.slips, stake=a.stake, min_cut=a.min_cut)
+            if a.tier in ("value", "all"):
+                built += sl.value(df, a.slips)
             title = a.title or f"GG2+ Flexibet slips, {start:%d %b} to {(end - timedelta(seconds=1)):%d %b}"
             md = sl.to_markdown(built, a.stake, now, title)
             if not built:
@@ -841,11 +843,12 @@ def main(argv=None):
 
     p = sub.add_parser("slips", help="GG/NG 2+ Flexibet accumulator slips: build or settle")
     ssub = p.add_subparsers(dest="action", required=True)
-    q = ssub.add_parser("build", help="build aggressive and/or middle-tier slips from logged fixtures with GG2+ prices")
+    q = ssub.add_parser("build", help="build aggressive, middle-tier and value slips from logged fixtures with GG2+ prices")
     q.add_argument("--start", help="first kick-off date YYYY-MM-DD (default now)")
     q.add_argument("--end", help="last kick-off date YYYY-MM-DD (default start + --days)")
     q.add_argument("--days", type=int, default=3)
-    q.add_argument("--tier", choices=["aggressive", "middle", "both"], default="both")
+    q.add_argument("--tier", choices=["aggressive", "middle", "value", "all", "both"], default="all",
+                   help="'both' is aggressive and middle; 'all' adds the value tier")
     q.add_argument("--slips", type=int, default=10, help="slips per tier")
     q.add_argument("--stake", type=float, default=10.0)
     q.add_argument("--min-cut", type=float, default=15000.0, help="middle tier: lowest acceptable cut price")

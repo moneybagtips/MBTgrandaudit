@@ -243,6 +243,23 @@ def middle(df, n_slips=10, stake=10.0, min_cut=15000.0, seed=11, tries=5000):
     return [Slip("middle", f"Middle slip {i}", k, legs) for i, legs in enumerate(got, 1)]
 
 
+def value(df, n_slips=10, n_legs=4):
+    """Short straight accumulators, no Flexibet cuts. For each fixture take the side whose
+    model chance x price is highest, keep the best n_slips*n_legs of those, and deal them
+    round the slips so every slip gets a similar mix."""
+    if len(df) < n_slips * n_legs:
+        return []
+    ey, en = df["py"] * df["oy"], df["pn"] * df["on"]
+    side = pd.DataFrame(dict(event_id=df["event_id"], yes=ey > en, edge=ey.where(ey > en, en)))
+    top = side.sort_values("edge", ascending=False).head(n_slips * n_legs).reset_index(drop=True)
+    out = []
+    for i in range(n_slips):
+        picks = top.iloc[i::n_slips]
+        legs = _legs(df, picks.loc[picks["yes"], "event_id"], picks.loc[~picks["yes"], "event_id"])
+        out.append(Slip("value", f"Value slip {i + 1}", 0, legs))
+    return out
+
+
 # ---------------------------------------------------------------- output
 
 def to_markdown(slips: list[Slip], stake: float, now: datetime, title: str) -> str:
@@ -251,19 +268,29 @@ def to_markdown(slips: list[Slip], stake: float, now: datetime, title: str) -> s
            f"SportyBet GG/NG 2+ prices. Stake GHS {stake:g} per slip. Kick-off times are UTC.", "",
            "The cut price is an estimate (it can be a few % off). If SportyBet shows a little less, "
            "swap the weakest No leg for the next one down.", ""]
-    for tier, label in (("aggressive", "Aggressive"), ("middle", "Middle tier")):
+    for tier, label in (("aggressive", "Aggressive"), ("middle", "Middle tier"), ("value", "Value")):
         ts = [s for s in slips if s.tier == tier]
         if not ts:
             continue
         tot = sum(s.chance for s in ts)
-        out += [f"## {label}", "",
-                f"{len(ts)} slips. Chance at least one pays: about 1 in {1 / tot:,.0f}." if tot else "", ""]
+        if tier == "value":
+            ret = sum(s.chance * s.full_odds * stake for s in ts)
+            out += [f"## {label}", "", f"{len(ts)} straight slips, no Flexibet. Model's expected return: "
+                    f"about GHS {ret:,.0f} for GHS {stake * len(ts):g}.", ""]
+        else:
+            out += [f"## {label}", "",
+                    f"{len(ts)} slips. Chance at least one pays: about 1 in {1 / tot:,.0f}." if tot else "", ""]
         for s in ts:
             y = sum(l.pick == "Yes" for l in s.legs)
             pay = min(s.est_cut_odds * stake, MAX_PAYOUT)
-            out += [f"### {s.name}: {len(s.legs)} legs ({y} Yes), Flexibet {s.cuts} cut{'s' * (s.cuts != 1)}", "",
-                    f"Full odds {s.full_odds:,.0f}; est. {s.cuts}-cut odds {s.est_cut_odds:,.0f} "
-                    f"(pays about GHS {pay:,.0f}); chance 1 in {1 / s.chance:,.0f}.", "",
+            if s.cuts:
+                out += [f"### {s.name}: {len(s.legs)} legs ({y} Yes), Flexibet {s.cuts} cut{'s' * (s.cuts != 1)}", "",
+                        f"Full odds {s.full_odds:,.0f}; est. {s.cuts}-cut odds {s.est_cut_odds:,.0f} "
+                        f"(pays about GHS {pay:,.0f}); chance 1 in {1 / s.chance:,.0f}.", ""]
+            else:
+                out += [f"### {s.name}: {len(s.legs)} legs ({y} Yes), no cuts", "",
+                        f"Odds {s.full_odds:,.2f} (pays GHS {pay:,.2f}); model chance {s.chance:.0%}.", ""]
+            out += [
                     "| # | League | Kick-off | Match | Pick | Model | Odds |", "|---|---|---|---|---|---|---|"]
             for i, l in enumerate(s.legs, 1):
                 pick = f"**GG2+ {l.pick}**" if l.pick == "Yes" else f"GG2+ {l.pick}"
