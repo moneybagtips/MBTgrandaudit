@@ -109,3 +109,25 @@ def test_entered_odds_stay_out_of_the_model_by_default(monkeypatch):
     assert Settings().entered_odds_in_model is False
     monkeypatch.setenv("MBT_ENTERED_ODDS_IN_MODEL", "1")
     assert Settings().entered_odds_in_model is True
+
+
+def test_value_slips_are_short_straight_accas_of_the_best_edges():
+    df = _pool()
+    df.loc[0, ["py", "oy"]] = [0.30, 4.0]  # a Yes edge of 1.2 must lead the value legs
+    slips = sl.value(df)
+    assert len(slips) == 10
+    assert all(len(s.legs) == 4 and s.cuts == 0 and s.tier == "value" for s in slips)
+    ids = [l.event_id for s in slips for l in s.legs]
+    assert len(set(ids)) == 40
+    lead = [l for l in slips[0].legs if l.event_id == "e0"]
+    assert lead and lead[0].pick == "Yes"
+    assert slips[0].est_cut_odds == slips[0].full_odds
+    assert sl.value(_pool(20)) == []
+
+
+def test_calm_slips_sit_between_middle_and_value():
+    slips = sl.calm(_pool(), n_slips=3, min_cut=500, tries=600)
+    assert slips
+    for s in slips:
+        assert len(s.legs) == 22 and sum(l.pick == "Yes" for l in s.legs) == 7 and s.cuts == 1
+        assert s.est_cut_odds >= 500

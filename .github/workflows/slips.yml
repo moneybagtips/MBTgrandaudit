@@ -1,8 +1,8 @@
 name: Slips
 
 # Upload SportyBet GG/NG 2+ screenshots to odds/inbox/ (the GitHub app works from a phone).
-# This reads them with the vision model, saves the prices, builds the aggressive and
-# middle-tier Flexibet slips for the next days into slips/, and opens a "Slips:" issue
+# This reads them with the vision model, saves the prices, builds the aggressive,
+# middle-tier and value slips for the next days into slips/, and opens a "Slips:" issue
 # with the price review and the slips. Run it by hand to rebuild from prices already saved.
 on:
   push:
