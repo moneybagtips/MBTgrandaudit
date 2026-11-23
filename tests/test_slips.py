@@ -123,3 +123,11 @@ def test_value_slips_are_short_straight_accas_of_the_best_edges():
     assert lead and lead[0].pick == "Yes"
     assert slips[0].est_cut_odds == slips[0].full_odds
     assert sl.value(_pool(20)) == []
+
+
+def test_calm_slips_sit_between_middle_and_value():
+    slips = sl.calm(_pool(), n_slips=3, min_cut=500, tries=600)
+    assert slips
+    for s in slips:
+        assert len(s.legs) == 22 and sum(l.pick == "Yes" for l in s.legs) == 7 and s.cuts == 1
+        assert s.est_cut_odds >= 500

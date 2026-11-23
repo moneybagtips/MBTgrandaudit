@@ -243,6 +243,13 @@ def middle(df, n_slips=10, stake=10.0, min_cut=15000.0, seed=11, tries=5000):
     return [Slip("middle", f"Middle slip {i}", k, legs) for i, legs in enumerate(got, 1)]
 
 
+def calm(df, n_slips=10, n_legs=22, n_yes=7, cuts=1, stake=10.0, min_cut=1500.0, seed=5, tries=3000):
+    """Between middle and value: about 22 legs with 7 Yes and one cut, priced for a
+    four- to five-figure return at far better odds of landing."""
+    got = _diverse(df, n_slips, n_legs, n_yes, cuts, stake, min_cut, "chance", 20, seed, tries)
+    return [Slip("calm", f"Calm slip {i}", cuts, legs) for i, legs in enumerate(got, 1)]
+
+
 def value(df, n_slips=10, n_legs=4):
     """Short straight accumulators, no Flexibet cuts. For each fixture take the side whose
     model chance x price is highest, keep the best n_slips*n_legs of those, and deal them
@@ -268,7 +275,7 @@ def to_markdown(slips: list[Slip], stake: float, now: datetime, title: str) -> s
            f"SportyBet GG/NG 2+ prices. Stake GHS {stake:g} per slip. Kick-off times are UTC.", "",
            "The cut price is an estimate (it can be a few % off). If SportyBet shows a little less, "
            "swap the weakest No leg for the next one down.", ""]
-    for tier, label in (("aggressive", "Aggressive"), ("middle", "Middle tier"), ("value", "Value")):
+    for tier, label in (("aggressive", "Aggressive"), ("middle", "Middle tier"), ("calm", "Calm"), ("value", "Value")):
         ts = [s for s in slips if s.tier == tier]
         if not ts:
             continue
